@@ -16,8 +16,13 @@ class MovementController:
         self.setup_logging()
         
         # Initialize hardware
-        self.chassis = mecanum.MecanumChassis()
-        self.board = Board()
+        try:
+            self.chassis = mecanum.MecanumChassis()
+            self.board = Board()
+        except Exception as e:
+            self.logger.error(f"Failed to initialize movement hardware: {e}")
+            self.chassis = None
+            self.board = None
         
         # Movement state
         self.is_moving = False
@@ -49,6 +54,9 @@ class MovementController:
     
     def stop(self):
         """Stop all robot movement"""
+        if not self.chassis:
+            return
+            
         try:
             self.chassis.set_velocity(0, 0, 0)
             self.is_moving = False
@@ -59,6 +67,10 @@ class MovementController:
     
     def move_forward(self, speed: float):
         """Move robot forward at specified speed"""
+        if not self.chassis:
+            self.logger.warning("Chassis not available - simulating movement")
+            return
+            
         speed = max(self.min_speed, min(speed, self.max_speed))
         
         try:
@@ -73,6 +85,10 @@ class MovementController:
     
     def turn(self, direction: str, speed: float):
         """Turn robot in specified direction"""
+        if not self.chassis:
+            self.logger.warning("Chassis not available - simulating turn")
+            return
+            
         speed = max(self.min_speed, min(speed, self.max_speed))
         turn_speed = speed * self.config.get('turn_multiplier', 0.8)
         
@@ -96,6 +112,10 @@ class MovementController:
     
     def move_and_turn(self, forward_speed: float, turn_direction: str, turn_speed: float):
         """Move forward while turning (combined movement)"""
+        if not self.chassis:
+            self.logger.warning("Chassis not available - simulating combined movement")
+            return
+            
         forward_speed = max(0, min(forward_speed, self.max_speed))
         turn_speed = max(0, min(turn_speed, self.max_speed))
         
@@ -185,6 +205,10 @@ class MovementController:
         """Calibration routine to test different movement speeds"""
         self.logger.info("Starting movement calibration...")
         
+        if not self.chassis:
+            self.logger.warning("Chassis not available - calibration skipped")
+            return
+        
         speeds_to_test = [15, 25, 35, 50]
         
         for speed in speeds_to_test:
@@ -204,23 +228,6 @@ class MovementController:
                 time.sleep(1)
         
         self.logger.info("Movement calibration complete")
-    
-    def test_movement_sequence(self):
-        """Test sequence for movement validation"""
-        movements = [
-            {'action': 'APPROACH_NORMAL', 'forward_speed': 30, 'turn_direction': 'STRAIGHT', 'turn_speed': 0},
-            {'action': 'APPROACH_NORMAL', 'forward_speed': 25, 'turn_direction': 'LEFT', 'turn_speed': 20},
-            {'action': 'APPROACH_NORMAL', 'forward_speed': 25, 'turn_direction': 'RIGHT', 'turn_speed': 20},
-            {'action': 'APPROACH_SLOW', 'forward_speed': 15, 'turn_direction': 'STRAIGHT', 'turn_speed': 0},
-            {'action': 'STOP', 'forward_speed': 0, 'turn_direction': 'STRAIGHT', 'turn_speed': 0}
-        ]
-        
-        for i, command in enumerate(movements):
-            self.logger.info(f"Test movement {i+1}: {command['action']}")
-            self.execute_movement_command(command)
-            time.sleep(2)
-        
-        self.logger.info("Movement test sequence complete")
     
     def cleanup(self):
         """Cleanup movement controller"""
