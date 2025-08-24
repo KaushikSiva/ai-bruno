@@ -1,0 +1,113 @@
+{
+    "camera": {
+        "device_id": "http://127.0.0.1:8080?action=stream",
+        "fallback_device_id": 0,
+        "width": 640,
+        "height": 480,
+        "fps": 30,
+        "flip_horizontal": true
+    },
+    "detection": {
+        "color_detection": {
+            "clear_plastic": {
+                "lower_hsv": [0, 0, 150],
+                "upper_hsv": [180, 50, 255]
+            },
+            "blue_plastic": {
+                "lower_hsv": [100, 150, 50],
+                "upper_hsv": [130, 255, 255]
+            },
+            "green_plastic": {
+                "lower_hsv": [40, 100, 50],
+                "upper_hsv": [80, 255, 255]
+            }
+        },
+        "size_filter": {
+            "min_area": 1000,
+            "max_area": 50000,
+            "min_aspect_ratio": 1.2,
+            "max_aspect_ratio": 4.5
+        },
+        "morphology": {
+            "kernel_size": 3,
+            "iterations": 2
+        },
+        "confidence_threshold": 0.6,
+        "detection_cooldown": 1.0,
+        "auto_approach": true
+    },
+    "distance_estimation": {
+        "focal_length": 500,
+        "real_bottle_height": 20,
+        "camera_height": 25,
+        "camera_tilt": 15,
+        "stop_distance": 30,
+        "approach_distance": 100,
+        "max_detection_distance": 200
+    },
+    "head_control": {
+        "enabled": true,
+        "response_to_detection": true,
+        "look_at_bottles": true,
+        "head_servo": {
+            "id": 2,
+            "positions": {
+                "center": 1500,
+                "left": 1200,
+                "right": 1800,
+                "up": 1300,
+                "down": 1700
+            },
+            "timings": {
+                "normal_movement": 0.5,
+                "slow_movement": 1.0,
+                "fast_movement": 0.3,
+                "nod_pause": 0.8
+            }
+        },
+        "nodding_patterns": {
+            "excited": {
+                "sequence": ["left", "right", "left", "right"],
+                "speed": "fast_movement",
+                "repetitions": 3
+            },
+            "acknowledgment": {
+                "sequence": ["up", "down", "center"],
+                "speed": "normal_movement",
+                "repetitions": 2
+            },
+            "scanning": {
+                "sequence": ["left", "center", "right", "center"],
+                "speed": "slow_movement",
+                "repetitions": 1
+            }
+        }
+    },
+    "movement_control": {
+        "enabled": true,
+        "max_speed": 40,
+        "min_speed": 15,
+        "turn_multiplier": 0.8,
+        "movement_timeout": 0.5,
+        "approach_enabled": true,
+        "safety_enabled": true,
+        "smooth_acceleration": true
+    },
+    "arm_control": {
+        "enabled": true,
+        "pickup_height": 5,
+        "home_position": [15, 0, 20],
+        "drop_position": [20, -15, 10],
+        "gripper_servo": {
+            "id": 5,
+            "open_position": 1800,
+            "closed_position": 1200
+        }
+    },
+    "behavior": {
+        "celebration_on_detection": true,
+        "approach_bottles_automatically": true,
+        "stop_on_reach": true,
+        "max_detection_responses": 5
+    }
+}
