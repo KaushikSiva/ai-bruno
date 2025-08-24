@@ -2,6 +2,7 @@
 """
 Web Interface for Bruno Bottle Detection Robot
 Provides remote monitoring and control via web browser
+Headless operation - no Qt/display required
 """
 
 import os
@@ -11,13 +12,18 @@ import time
 import threading
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request, Response
+
+# Set environment to prevent Qt issues
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
 import cv2
 import base64
+import numpy as np
 
 # Add src directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from bottle_detection.bruno_bottle_detector import BrunoBottleDetector
+from bruno_headless import BrunoHeadless
 
 class BrunoWebInterface:
     def __init__(self, config_file: str = None):
@@ -59,7 +65,7 @@ class BrunoWebInterface:
             """Start Bruno detection system"""
             try:
                 if not self.bruno:
-                    self.bruno = BrunoBottleDetector(self.config_file)
+                    self.bruno = BrunoHeadless(self.config_file)
                 
                 if not self.status['running']:
                     # Start Bruno in separate thread
