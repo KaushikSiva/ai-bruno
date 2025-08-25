@@ -313,18 +313,19 @@ class BrunoRoombaSimple:
         except Exception as e:
             self.logger.warning(f"Save failed: {e}")
     
-    def run(self):
+    def run(self, max_runtime=20):
         """Main execution loop"""
         self.logger.info("🚀 Starting Bruno Roomba Simple Mode")
         self.logger.info("🏠 Autonomous navigation with bottle detection")
-        self.logger.info("⏹️  Press Ctrl+C to stop")
+        self.logger.info(f"⏱️  Will stop automatically after {max_runtime} seconds")
         
         self.running = True
         frame_count = 0
         last_status_log = 0
+        start_time = time.time()
         
         try:
-            while self.running:
+            while self.running and (time.time() - start_time) < max_runtime:
                 ret, frame = self.camera.read()
                 if not ret:
                     self.logger.error("Failed to capture frame")
@@ -352,6 +353,9 @@ class BrunoRoombaSimple:
             import traceback
             traceback.print_exc()
         finally:
+            elapsed_time = time.time() - start_time
+            if elapsed_time >= max_runtime:
+                self.logger.info(f"⏱️  Auto-stopped after {max_runtime} seconds")
             self.cleanup()
     
     def cleanup(self):
