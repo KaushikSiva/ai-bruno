@@ -95,7 +95,7 @@ class EnhancedBottleDetector:
         
         # Motion detection (helps with moving bottles)
         motion_mask = None
-        if self.config['motion_detection']:
+        if self.config.get('motion_detection', True):
             motion_mask = self.background_subtractor.apply(frame)
         
         return {
@@ -246,7 +246,7 @@ class EnhancedBottleDetector:
         """Filter and rank bottles by confidence"""
         # Filter by minimum confidence
         filtered_bottles = [b for b in bottles 
-                           if b['confidence'] >= self.config['detection_threshold']]
+                           if b['confidence'] >= self.config.get('detection_threshold', 0.4)]
         
         # Sort by confidence (highest first)
         filtered_bottles.sort(key=lambda b: b['confidence'], reverse=True)
