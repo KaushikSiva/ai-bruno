@@ -49,7 +49,22 @@ def run_headless_mode(args):
     print("🤖 Starting Bruno in HEADLESS mode")
     print("📱 Perfect for SSH connections and remote operation")
     
-    # Import and run headless version
+    # Try simple version first (most reliable)
+    try:
+        from bruno_simple import main as simple_main
+        
+        # Set up arguments for simple mode
+        sys.argv = ['bruno_simple.py']
+        if args.config:
+            sys.argv.extend(['--config', args.config])
+        
+        simple_main()
+        return True
+        
+    except ImportError as e:
+        print(f"⚠️  Simple mode failed: {e}")
+        
+    # Fallback to original headless version
     try:
         from bruno_headless import main as headless_main
         
@@ -63,15 +78,11 @@ def run_headless_mode(args):
             sys.argv.append('--no-save')
         
         headless_main()
+        return True
         
-    except ImportError as e:
-        print(f"❌ Failed to import headless mode: {e}")
-        return False
     except Exception as e:
         print(f"❌ Error running headless mode: {e}")
         return False
-    
-    return True
 
 def run_web_interface(args):
     """Run Bruno web interface"""

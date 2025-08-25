@@ -167,8 +167,23 @@ class BrunoWebInterface:
                 return processed_frame
             
             self.bruno.process_frame = web_process_frame
-            self.bruno.run()
             
+            # Run Bruno's main loop manually to avoid signal issues
+            self.bruno.logger.info("🚀 Starting Bruno via Web Interface")
+            self.bruno.running = True
+            
+            frame_count = 0
+            while self.bruno.running and self.status['running']:
+                ret, frame = self.bruno.camera.read()
+                if not ret:
+                    self.bruno.logger.error("Failed to capture frame")
+                    time.sleep(1)
+                    continue
+                
+                frame_count += 1
+                self.bruno.process_frame(frame)
+                time.sleep(0.05)  # ~20 FPS
+                
         except Exception as e:
             self.status['error'] = str(e)
             self.status['running'] = False

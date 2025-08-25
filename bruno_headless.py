@@ -10,7 +10,6 @@ import sys
 import json
 import time
 import logging
-import signal
 from datetime import datetime
 
 # Add src directory to path
@@ -40,16 +39,7 @@ class BrunoHeadless(BrunoBottleDetector):
         if self.save_detections:
             os.makedirs(self.detection_images_dir, exist_ok=True)
         
-        # Setup signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self.signal_handler)
-        signal.signal(signal.SIGTERM, self.signal_handler)
-        
         self.logger.info("Bruno running in HEADLESS mode - no display required")
-    
-    def signal_handler(self, signum, frame):
-        """Handle shutdown signals gracefully"""
-        self.logger.info(f"Received signal {signum} - shutting down gracefully")
-        self.running = False
     
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         """Process frame without displaying (headless mode)"""
