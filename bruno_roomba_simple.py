@@ -125,6 +125,10 @@ class BrunoRoombaSimple:
                     'backup_speed': 20,
                     'forward_time_min': 2.0,
                     'forward_time_max': 8.0,
+                    'turn_time_min': 1.0,
+                    'turn_time_max': 3.0,
+                    'backup_time': 1.5,
+                    'spiral_time': 10.0,
                     'stuck_detection': True
                 },
                 'head_control': {
