@@ -780,61 +780,90 @@ class GPTDetector:
     
     def _detect_with_gpt(self, frame_bgr: np.ndarray) -> Optional[Detection]:
         """Detect using OpenAI GPT Vision"""
+        self.logger.debug("Using GPT Vision API for detection")
         jpg_bytes = self.encode_jpeg_from_bgr(frame_bgr)
         b64 = base64.b64encode(jpg_bytes).decode("utf-8")
         data_url = f"data:image/jpeg;base64,{b64}"
 
-        body = [
+        messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": self.prompt},
-                    {"type": "input_image", "image_url": data_url},
+                    {"type": "text", "text": self.prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": data_url,
+                            "detail": "low"
+                        }
+                    },
                 ],
             }
         ]
 
         try:
-            resp = self.client.responses.create(
+            self.logger.debug(f"Making GPT Vision API call with model: {self.model}")
+            resp = self.client.chat.completions.create(
                 model=self.model,
-                input=body,
+                messages=messages,
                 temperature=self.temperature,
                 response_format={"type": "json_object"},
+                max_tokens=500
             )
             
-            text = getattr(resp, "output_text", None)
+            text = resp.choices[0].message.content
             if not text:
-                if hasattr(resp, "output") and isinstance(resp.output, list) and resp.output:
-                    text = str(resp.output[0])
-            if not text:
+                self.logger.warning("No response text from GPT Vision API")
                 return None
 
+            self.logger.debug(f"GPT Vision response: {text[:200]}...")
             payload = json.loads(text)
-            return self._payload_to_detection(payload)
+            detection = self._payload_to_detection(payload)
+            self.logger.info(f"GPT Vision detection: bottle={detection.bottle_present} bin={detection.bin_present}")
+            return detection
 
         except (APIError, json.JSONDecodeError) as e:
-            self.logger.warning(f"GPT detection failed: {e}")
+            self.logger.error(f"GPT detection failed: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Unexpected error in GPT detection: {e}")
             return None
     
     def _detect_with_local(self, frame_bgr: np.ndarray) -> Optional[Detection]:
         """Detect using local OpenCV-based detector"""
         try:
-            # Use the existing Bruno bottle detector
-            bottles = self.local_detector.detect_bottles(frame_bgr)
+            # Use the existing Bruno bottle detector - it returns (bottles, annotated_frame)
+            bottles, _ = self.local_detector.detect_bottles(frame_bgr)
             
             det = Detection()
-            if bottles:
+            if bottles and len(bottles) > 0:
                 # Get the best bottle detection
                 best_bottle = max(bottles, key=lambda x: x.get('confidence', 0))
                 det.bottle_present = True
-                det.bottle_bbox = best_bottle.get('bbox')
+                
+                # Convert bottle format to bbox format (x, y, w, h)
+                if 'bbox' in best_bottle:
+                    det.bottle_bbox = best_bottle['bbox']
+                elif 'center' in best_bottle and 'size' in best_bottle:
+                    # Convert center+size to bbox
+                    center_x, center_y = best_bottle['center']
+                    w, h = best_bottle['size']
+                    x = int(center_x - w/2)
+                    y = int(center_y - h/2)
+                    det.bottle_bbox = (x, y, w, h)
+                else:
+                    det.bottle_bbox = None
+                    
                 det.bottle_conf = best_bottle.get('confidence', 0.0)
+                self.logger.info(f"Local detection: bottle found with confidence {det.bottle_conf:.2f}")
             
             # Note: Local detector doesn't detect bins, so bin detection will be False
             return det
             
         except Exception as e:
             self.logger.error(f"Local detection failed: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     @staticmethod
