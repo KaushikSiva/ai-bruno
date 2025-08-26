@@ -498,10 +498,10 @@ class BrunoRobotController:
             except Exception as e:
                 self.logger.warning(f"Failed to initialize Bruno controllers: {e}")
         
-        # Movement parameters
-        self.forward_speed = config.get('movement_control', {}).get('max_speed', 40) / 100.0
+        # Movement parameters - increased for faster movement
+        self.forward_speed = config.get('movement_control', {}).get('max_speed', 70) / 100.0  # Increased from 40 to 70
         self.turn_speed = self.forward_speed * 0.8
-        self.approach_speed = self.forward_speed * 0.6
+        self.approach_speed = self.forward_speed * 0.7  # Slightly increased approach speed
         
         # Safety and collision avoidance
         self.collision_avoidance = CollisionAvoidance(config)
@@ -1065,20 +1065,20 @@ def main():
                         safety_level = robot.collision_avoidance.check_safety(det.obstacles)
                         if safety_level == SafetyLevel.DANGER:
                             # Back up and turn away from obstacle
-                            robot.drive(-0.2, -0.2, duration=0.3)
-                            robot.rotate(0.5, duration=0.5)
+                            robot.drive(-0.4, -0.4, duration=0.3)  # Faster backup
+                            robot.rotate(0.7, duration=0.4)        # Faster turn
                             logger.info("Obstacle avoidance - backing up and turning")
                         elif safety_level == SafetyLevel.CAUTION:
                             # Turn slightly to avoid obstacle
-                            robot.rotate(0.3, duration=0.3)
+                            robot.rotate(0.5, duration=0.3)        # Faster turn
                             logger.info("Obstacle detected - turning to avoid")
                         else:
                             # Move forward cautiously
-                            robot.drive(0.25, 0.25, duration=0.2)
+                            robot.drive(0.6, 0.6, duration=0.2)    # Much faster forward
                             logger.info("Exploring forward")
                     else:
                         # No obstacles, move forward exploring
-                        robot.drive(0.3, 0.3, duration=0.2)
+                        robot.drive(0.7, 0.7, duration=0.2)        # Much faster exploration
                         logger.info("Exploring room - moving forward")
                         
                 elif state == States.SEARCH_BIN:
@@ -1086,14 +1086,14 @@ def main():
                     if det and det.obstacles:
                         safety_level = robot.collision_avoidance.check_safety(det.obstacles)
                         if safety_level == SafetyLevel.DANGER:
-                            robot.drive(-0.2, -0.2, duration=0.3)
-                            robot.rotate(-0.5, duration=0.5)
+                            robot.drive(-0.4, -0.4, duration=0.3)  # Faster backup
+                            robot.rotate(-0.7, duration=0.4)       # Faster turn
                             logger.info("Bin search - obstacle avoidance")
                         else:
-                            robot.drive(0.2, 0.25, duration=0.2)  # Slight arc movement
+                            robot.drive(0.5, 0.6, duration=0.2)    # Faster arc movement
                             logger.info("Bin search - exploring with arc movement")
                     else:
-                        robot.drive(0.25, 0.3, duration=0.2)  # Slight right bias
+                        robot.drive(0.6, 0.7, duration=0.2)        # Faster exploration with right bias
                         logger.info("Bin search - exploring room")
                 continue
 
