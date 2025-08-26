@@ -651,11 +651,12 @@ class BrunoRobotController:
             
         if self.head_controller:
             if pattern == "excited":
-                self.head_controller.nod_excited()
+                self.head_controller.nod_yes(repetitions=3)  # More enthusiastic
             elif pattern == "acknowledgment":
-                self.head_controller.nod_yes()
+                self.head_controller.nod_yes(repetitions=2)
             elif pattern == "scanning":
-                self.head_controller.scan_horizontally()
+                # Use nod_no for scanning gesture (head shake)
+                self.head_controller.nod_no(repetitions=1)
 
 # ------------------------- Enhanced Detection via OpenAI Vision -------------------------
 
