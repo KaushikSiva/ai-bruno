@@ -5,7 +5,9 @@
         "width": 640,
         "height": 480,
         "fps": 30,
-        "flip_horizontal": true
+        "flip_horizontal": true,
+        "max_camera_failures": 10,
+        "max_recovery_attempts": 3
     },
     "detection": {
         "color_detection": {
@@ -121,9 +123,5 @@
         "enable_obstacle_detection": true,
         "enable_emergency_stop": true,
         "enable_speed_limiting": true
-    },
-    "camera": {
-        "max_camera_failures": 10,
-        "max_recovery_attempts": 3
     }
 }

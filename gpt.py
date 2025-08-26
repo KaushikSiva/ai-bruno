@@ -332,25 +332,36 @@ class BrunoCamera:
         self.logger = logging.getLogger(__name__)
     
     def start(self):
-        """Start camera capture with error recovery"""
-        for attempt in range(self.max_recovery_attempts):
-            try:
-                if isinstance(self.device_id, str) and self.device_id.startswith('http'):
-                    success = self._start_ffmpeg_capture()
-                else:
-                    success = self._start_opencv_capture()
-                
-                if success:
-                    self.consecutive_failures = 0
-                    self.recovery_attempts = 0
-                    return True
-                    
-            except Exception as e:
-                self.logger.error(f"Camera start attempt {attempt + 1} failed: {e}")
-                self.recovery_attempts += 1
-                time.sleep(1.0)
+        """Start camera capture with error recovery and multiple fallbacks"""
+        # Try multiple camera sources like bruno_roomba_simple.py
+        camera_sources = [
+            'http://127.0.0.1:8080?action=stream',
+            'http://localhost:8080?action=stream',
+            0, 1
+        ]
         
-        self.logger.error("All camera start attempts failed")
+        for source in camera_sources:
+            self.logger.info(f"Trying camera source: {source}")
+            self.device_id = source
+            
+            for attempt in range(self.max_recovery_attempts):
+                try:
+                    if isinstance(source, str) and source.startswith('http'):
+                        success = self._start_ffmpeg_capture()
+                    else:
+                        success = self._start_opencv_capture()
+                    
+                    if success:
+                        self.consecutive_failures = 0
+                        self.recovery_attempts = 0
+                        self.logger.info(f"Camera started successfully with source: {source}")
+                        return True
+                        
+                except Exception as e:
+                    self.logger.warning(f"Camera source {source} attempt {attempt + 1} failed: {e}")
+                    time.sleep(0.5)
+        
+        self.logger.error("All camera sources and attempts failed")
         return False
     
     def _start_opencv_capture(self):
