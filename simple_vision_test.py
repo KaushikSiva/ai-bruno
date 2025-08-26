@@ -20,6 +20,13 @@ import numpy as np
 from PIL import Image
 
 try:
+    import cv2
+    OPENCV_AVAILABLE = True
+except ImportError:
+    print("Warning: OpenCV not available. Camera capture will not work.")
+    OPENCV_AVAILABLE = False
+
+try:
     from openai import OpenAI, APIError
     OPENAI_AVAILABLE = True
 except ImportError:
@@ -134,9 +141,11 @@ def ask_gpt_vision(client, image_base64, prompt="Describe what you see in this i
 
 def setup_camera(device_id=0):
     """Setup camera capture - similar to gpt.py approach"""
-    try:
-        import cv2
+    if not OPENCV_AVAILABLE:
+        print("Error: OpenCV not available for camera capture")
+        return None
         
+    try:
         # Try multiple camera sources like gpt.py
         camera_sources = [
             device_id,
@@ -179,6 +188,10 @@ def capture_image_from_camera(cap, save_path=None):
     """Capture an image from the camera"""
     if cap is None:
         print("No camera available")
+        return None
+    
+    if not OPENCV_AVAILABLE:
+        print("Error: OpenCV not available for image processing")
         return None
     
     print("Capturing image from camera...")
