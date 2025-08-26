@@ -103,3 +103,23 @@
 2025-08-24 22:30:15,427 - ERROR - Error in enhanced bottle detection: 'motion_detection'
 2025-08-24 22:30:15,486 - ERROR - Error in enhanced bottle detection: 'motion_detection'
 2025-08-24 22:30:15,543 - ERROR - Error in enhanced bottle detection: 'motion_detection'
+2025-08-25 10:51:10,615 - INFO - ✅ Movement hardware initialized
+2025-08-25 10:51:10,615 - INFO - 🤖 Roomba Navigator initialized
+2025-08-25 10:51:11,217 - INFO - ✅ Head controller initialized
+2025-08-25 10:51:11,217 - INFO - 🔍 Trying camera: http://127.0.0.1:8080?action=stream
+2025-08-25 10:51:11,368 - INFO - ✅ Camera connected: http://127.0.0.1:8080?action=stream
+2025-08-25 10:51:11,369 - INFO - 🤖 Bruno Roomba Simple initialized
+2025-08-25 10:51:11,369 - INFO - 🚀 Starting Bruno Roomba Simple Mode
+2025-08-25 10:51:11,369 - INFO - 🏠 Autonomous navigation with bottle detection
+2025-08-25 10:51:11,369 - INFO - ⏱️  Will stop automatically after 20 seconds
+2025-08-25 10:51:11,406 - INFO - 🎯 Starting pattern: turning
+2025-08-25 10:51:11,408 - INFO - 📊 Status: turning | Bottles: 0 detected, 0 approached
+2025-08-25 10:51:11,465 - ERROR - ❌ Error: 'turn_time_min'
+2025-08-25 10:51:11,467 - INFO - 🏁 Roomba Navigator cleanup complete
+2025-08-25 10:51:11,967 - INFO - Head controller cleanup complete
+2025-08-25 10:51:11,967 - INFO - 📊 Final Stats:
+2025-08-25 10:51:11,967 - INFO -    ⏱️  Runtime: 0.0 minutes
+2025-08-25 10:51:11,967 - INFO -    🍼 Detections: 0
+2025-08-25 10:51:11,968 - INFO -    🎯 Approached: 0
+2025-08-25 10:51:11,968 - INFO - ✅ Bruno Roomba cleanup complete
+                                                                                                                                      
