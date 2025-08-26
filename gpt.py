@@ -1164,6 +1164,7 @@ def main():
                         phase_start = time.time()
                         logger.info("STATE CHANGE: SEARCH_BOTTLE -> GRAB_BOTTLE")
                         logger.info(f"Bottle is close enough (height: {h} >= {bottle_close_h})")
+                        state = States.DONE
                     else:
                         logger.debug(f"Bottle not close enough yet (height: {h} < {bottle_close_h})")
                 else:
