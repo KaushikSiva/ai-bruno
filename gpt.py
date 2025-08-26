@@ -150,7 +150,9 @@ class CollisionAvoidance:
             # Find contours
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
-            for contour in contours:
+            self.logger.debug(f"Found {len(contours)} contours in frame")
+            
+            for i, contour in enumerate(contours):
                 area = cv2.contourArea(contour)
                 if area < 500:  # Filter small noise
                     continue
@@ -178,11 +180,14 @@ class CollisionAvoidance:
                 )
                 obstacles.append(obstacle)
                 
+                self.logger.debug(f"Obstacle {i+1}: {obstacle_type} at {distance:.1f}px, angle {angle:.1f}°, size {w}x{h}, conf {obstacle.confidence:.2f}")
+                
         except ImportError:
             self.logger.warning("OpenCV not available for obstacle detection")
         except Exception as e:
             self.logger.error(f"Obstacle detection failed: {e}")
         
+        self.logger.debug(f"Total obstacles detected: {len(obstacles)}")
         return obstacles
     
     def _estimate_distance(self, width: int, height: int, frame_width: int, frame_height: int) -> float:
@@ -737,12 +742,17 @@ class GPTDetector:
     
     def detect(self, frame_bgr: np.ndarray) -> Optional[Detection]:
         """Detect bottles, bins, and obstacles in frame"""
+        self.logger.debug("Starting detection process...")
+        
         # Always detect obstacles locally for safety
         obstacles = self.collision_avoidance.detect_obstacles(frame_bgr)
+        self.logger.debug(f"Local obstacle detection: {len(obstacles)} obstacles found")
         
         if self.api_available:
+            self.logger.debug("Using GPT Vision API for detection")
             detection = self._detect_with_gpt(frame_bgr)
         elif hasattr(self, 'local_detector') and self.local_detector:
+            self.logger.debug("Using local OpenCV detector (GPT API unavailable)")
             detection = self._detect_with_local(frame_bgr)
         else:
             self.logger.warning("No detection method available")
@@ -751,6 +761,9 @@ class GPTDetector:
         # Add obstacles to detection result
         if detection:
             detection.obstacles = obstacles
+            self.logger.debug(f"Detection complete - Bottle: {detection.bottle_present}, Bin: {detection.bin_present}, Obstacles: {len(obstacles)}")
+        else:
+            self.logger.warning("Detection failed - no results")
         
         return detection
     

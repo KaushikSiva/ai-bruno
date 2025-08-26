@@ -67,6 +67,7 @@ python3 gpt.py --camera-url http://127.0.0.1:8080?action=stream --dry-run
 - `--dry-run`: Print actions instead of actuating robot
 - `--save-debug`: Save debug images and detection results
 - `--enable-safety`: Enable collision avoidance and safety features (default: True)
+- `--log-level`: Set logging level (DEBUG, INFO, WARNING, ERROR, default: INFO)
 
 ### Configuration
 
@@ -137,6 +138,46 @@ This will test:
 - Module imports
 - Component creation
 - Basic functionality
+
+## Logging and Monitoring
+
+The system provides comprehensive logging to track robot behavior:
+
+### Log File
+All activity is logged to `bruno_gpt.log` with timestamps and log levels.
+
+### Log Viewer
+Use the included log viewer to monitor robot behavior:
+
+```bash
+# Follow logs in real-time
+python3 log_viewer.py --follow
+
+# Show log summary
+python3 log_viewer.py --summary
+
+# Filter by keyword
+python3 log_viewer.py --filter "BOTTLE DETECTED"
+
+# Filter by log level
+python3 log_viewer.py --level INFO
+
+# Show last 20 lines
+python3 log_viewer.py --lines 20
+```
+
+### Log Levels
+- **DEBUG**: Detailed technical information
+- **INFO**: General operational information
+- **WARNING**: Potential issues or safety concerns
+- **ERROR**: System errors or failures
+
+### Key Log Events
+- State changes and transitions
+- Object detection results
+- Safety and collision avoidance events
+- Emergency stops and recovery
+- Task completion status
 
 ## Debug Mode
 
