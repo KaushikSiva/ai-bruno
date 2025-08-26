@@ -1,0 +1,178 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bruno - Bottle Detection Robot Control</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .panel { background: white; padding: 20px; margin: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .status { display: flex; gap: 20px; flex-wrap: wrap; }
+        .status-item { flex: 1; min-width: 200px; text-align: center; }
+        .status-value { font-size: 2em; font-weight: bold; color: #333; }
+        .status-label { color: #666; }
+        .controls button { margin: 5px; padding: 10px 20px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; }
+        .start-btn { background: #4CAF50; color: white; }
+        .stop-btn { background: #f44336; color: white; }
+        .emergency-btn { background: #FF5722; color: white; }
+        .calibrate-btn { background: #2196F3; color: white; }
+        .video-container { text-align: center; }
+        .video-feed { max-width: 100%; border-radius: 8px; }
+        .running { color: #4CAF50; }
+        .stopped { color: #f44336; }
+        .error { color: #f44336; background: #ffebee; padding: 10px; border-radius: 4px; margin: 10px 0; }
+        .log { height: 200px; overflow-y: scroll; background: #333; color: #0f0; font-family: monospace; padding: 10px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Bruno - Bottle Detection Robot</h1>
+        
+        <div class="panel">
+            <h2>Status Dashboard</h2>
+            <div class="status">
+                <div class="status-item">
+                    <div class="status-value" id="status">Stopped</div>
+                    <div class="status-label">System Status</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-value" id="bottles">0</div>
+                    <div class="status-label">Bottles Detected</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-value" id="action">IDLE</div>
+                    <div class="status-label">Current Action</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-value" id="distance">0</div>
+                    <div class="status-label">Distance (cm)</div>
+                </div>
+            </div>
+            <div id="error-display"></div>
+        </div>
+        
+        <div class="panel">
+            <h2>Controls</h2>
+            <div class="controls">
+                <button class="start-btn" onclick="startBruno()">Start Detection</button>
+                <button class="stop-btn" onclick="stopBruno()">Stop</button>
+                <button class="emergency-btn" onclick="emergencyStop()">EMERGENCY STOP</button>
+                <button class="calibrate-btn" onclick="calibrateHead()">Calibrate Head</button>
+                <button class="calibrate-btn" onclick="calibrateMovement()">Calibrate Movement</button>
+            </div>
+        </div>
+        
+        <div class="panel">
+            <h2>Live Camera Feed</h2>
+            <div class="video-container">
+                <img class="video-feed" src="/video_feed" alt="Bruno Camera Feed">
+            </div>
+        </div>
+        
+        <div class="panel">
+            <h2>Activity Log</h2>
+            <div class="log" id="activity-log">
+                Bruno Web Interface Ready...<br>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function updateStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('status').textContent = data.running ? 'Running' : 'Stopped';
+                    document.getElementById('status').className = data.running ? 'status-value running' : 'status-value stopped';
+                    
+                    document.getElementById('bottles').textContent = data.bottles_detected || 0;
+                    document.getElementById('action').textContent = data.current_action || 'IDLE';
+                    document.getElementById('distance').textContent = Math.round(data.distance_to_bottle || 0);
+                    
+                    // Show errors
+                    const errorDiv = document.getElementById('error-display');
+                    if (data.error) {
+                        errorDiv.innerHTML = '<div class="error">Error: ' + data.error + '</div>';
+                    } else {
+                        errorDiv.innerHTML = '';
+                    }
+                })
+                .catch(error => console.error('Status update error:', error));
+        }
+        
+        function logActivity(message) {
+            const log = document.getElementById('activity-log');
+            const timestamp = new Date().toLocaleTimeString();
+            log.innerHTML += timestamp + ' - ' + message + '<br>';
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        function startBruno() {
+            fetch('/api/start', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        logActivity('Bruno detection started');
+                    } else {
+                        logActivity('Failed to start: ' + data.error);
+                    }
+                });
+        }
+        
+        function stopBruno() {
+            fetch('/api/stop', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        logActivity('Bruno stopped');
+                    } else {
+                        logActivity('Failed to stop: ' + data.error);
+                    }
+                });
+        }
+        
+        function emergencyStop() {
+            fetch('/api/emergency_stop', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        logActivity('EMERGENCY STOP activated');
+                    } else {
+                        logActivity('Emergency stop failed: ' + data.error);
+                    }
+                });
+        }
+        
+        function calibrateHead() {
+            fetch('/api/calibrate/head')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        logActivity('Head calibration completed');
+                    } else {
+                        logActivity('Head calibration failed: ' + data.error);
+                    }
+                });
+        }
+        
+        function calibrateMovement() {
+            fetch('/api/calibrate/movement')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        logActivity('Movement calibration completed');
+                    } else {
+                        logActivity('Movement calibration failed: ' + data.error);
+                    }
+                });
+        }
+        
+        // Update status every 2 seconds
+        setInterval(updateStatus, 2000);
+        updateStatus(); // Initial update
+    </script>
+</body>
+</html>
+        

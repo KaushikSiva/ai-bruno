@@ -947,7 +947,7 @@ def main():
                        help="Save debug images and results")
     parser.add_argument("--enable-safety", action="store_true", default=True,
                        help="Enable collision avoidance and safety features")
-    parser.add_argument("--log-level", default="INFO", 
+    parser.add_argument("--log-level", default="DEBUG", 
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                        help="Set logging level")
     args = parser.parse_args()
@@ -1157,7 +1157,11 @@ def main():
                     logger.info("Approaching bottle with collision avoidance...")
                     robot.approach_target(target_cx, W, duration=0.1, obstacles=det.obstacles)
                     
+                    print(h)
+                    print(bottle_close_h)
+                    print("-TEST-")
                     if h >= bottle_close_h:
+                        print("--TEST--")
                         robot.stop()
                         robot.head_nod("excited")
                         state = States.GRAB_BOTTLE

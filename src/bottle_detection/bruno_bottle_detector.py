@@ -12,7 +12,7 @@ import logging
 import json
 from typing import Optional, Dict, List
 from common.ros_robot_controller_sdk import Board
-from masterpi_sdk.kinematics_sdk.kinematics.arm_move_ik import *
+from kinematics.arm_move_ik import *
 
 # Import our custom modules
 import sys
