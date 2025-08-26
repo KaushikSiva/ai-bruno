@@ -1054,20 +1054,53 @@ def main():
                     robot.stop()
                     continue
 
-            if now - last_api_time < args.gpt_interval:
-                # Keep moving while waiting for next detection
+            time_since_last_detection = now - last_api_time
+            
+            if time_since_last_detection < args.gpt_interval:
+                # Keep moving around the room while waiting for next detection
                 if state == States.SEARCH_BOTTLE:
-                    robot.rotate(0.18, duration=0.05)
-                    logger.debug("Searching for bottles - rotating right")
+                    # Explore the room with forward movement and obstacle avoidance
+                    if det and det.obstacles:
+                        safety_level = robot.collision_avoidance.check_safety(det.obstacles)
+                        if safety_level == SafetyLevel.DANGER:
+                            # Back up and turn away from obstacle
+                            robot.drive(-0.2, -0.2, duration=0.3)
+                            robot.rotate(0.5, duration=0.5)
+                            logger.info("Obstacle avoidance - backing up and turning")
+                        elif safety_level == SafetyLevel.CAUTION:
+                            # Turn slightly to avoid obstacle
+                            robot.rotate(0.3, duration=0.3)
+                            logger.info("Obstacle detected - turning to avoid")
+                        else:
+                            # Move forward cautiously
+                            robot.drive(0.25, 0.25, duration=0.2)
+                            logger.info("Exploring forward")
+                    else:
+                        # No obstacles, move forward exploring
+                        robot.drive(0.3, 0.3, duration=0.2)
+                        logger.info("Exploring room - moving forward")
+                        
                 elif state == States.SEARCH_BIN:
-                    robot.rotate(-0.18, duration=0.05)
-                    logger.debug("Searching for bins - rotating left")
+                    # Similar exploration behavior when searching for bins
+                    if det and det.obstacles:
+                        safety_level = robot.collision_avoidance.check_safety(det.obstacles)
+                        if safety_level == SafetyLevel.DANGER:
+                            robot.drive(-0.2, -0.2, duration=0.3)
+                            robot.rotate(-0.5, duration=0.5)
+                            logger.info("Bin search - obstacle avoidance")
+                        else:
+                            robot.drive(0.2, 0.25, duration=0.2)  # Slight arc movement
+                            logger.info("Bin search - exploring with arc movement")
+                    else:
+                        robot.drive(0.25, 0.3, duration=0.2)  # Slight right bias
+                        logger.info("Bin search - exploring room")
                 continue
 
             # Run detection
-            logger.debug("Running detection...")
+            logger.info("Running GPT Vision detection...")
             det = detector.detect(frame)
             last_api_time = time.time()
+            logger.info(f"Detection completed - next detection in {args.gpt_interval} seconds")
             
             if det:
                 logger.debug(f"Detection results - Bottle: {det.bottle_present} (conf: {det.bottle_conf:.2f}), "
@@ -1133,9 +1166,8 @@ def main():
                     else:
                         logger.debug(f"Bottle not close enough yet (height: {h} < {bottle_close_h})")
                 else:
-                    # Keep scanning
-                    robot.rotate(0.2, duration=0.12)
-                    logger.debug("No bottle detected - continuing scan")
+                    # Continue exploring the room
+                    logger.info("No bottle detected - continuing exploration")
 
                 if time.time() - phase_start > timeout_each:
                     logger.warning("Timed out searching bottle; continuing to scan.")
@@ -1186,8 +1218,8 @@ def main():
                     else:
                         logger.debug(f"Bin not close enough yet (height: {h} < {bin_close_h})")
                 else:
-                    robot.rotate(-0.18, duration=0.12)
-                    logger.debug("No bin detected - continuing scan")
+                    # Continue exploring the room for bins
+                    logger.info("No bin detected - continuing exploration")
 
                 if time.time() - phase_start > timeout_each:
                     logger.warning("Timed out searching bin; continuing to scan.")
