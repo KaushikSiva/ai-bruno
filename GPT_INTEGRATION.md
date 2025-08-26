@@ -14,6 +14,10 @@ The `gpt.py` module provides AI-powered bottle detection using OpenAI's GPT Visi
 - **Configurable**: Works with Bruno's configuration system
 - **Multiple Camera Support**: Supports both local cameras and network camera streams
 - **Debug Mode**: Can save debug images and detection results
+- **Collision Avoidance**: Advanced obstacle detection and avoidance system
+- **Safety Systems**: Emergency stop functionality and speed limiting
+- **Error Recovery**: Robust camera and system error handling
+- **Path Planning**: Intelligent navigation with obstacle avoidance
 
 ## Prerequisites
 
@@ -62,6 +66,7 @@ python3 gpt.py --camera-url http://127.0.0.1:8080?action=stream --dry-run
 - `--model`: OpenAI model for vision (default: `gpt-4o-mini`)
 - `--dry-run`: Print actions instead of actuating robot
 - `--save-debug`: Save debug images and detection results
+- `--enable-safety`: Enable collision avoidance and safety features (default: True)
 
 ### Configuration
 
@@ -91,12 +96,13 @@ The system uses Bruno's existing configuration file (`config/bruno_config.json`)
 The system operates in the following states:
 
 1. **SEARCH_BOTTLE**: Rotate and scan for bottles
-2. **APPROACH_BOTTLE**: Move toward detected bottle
-3. **GRAB_BOTTLE**: Simulate bottle pickup
+2. **APPROACH_BOTTLE**: Move toward detected bottle (with collision avoidance)
+3. **GRAB_BOTTLE**: Simulate bottle pickup (with safety checks)
 4. **SEARCH_BIN**: Rotate and scan for garbage bins
-5. **APPROACH_BIN**: Move toward detected bin
-6. **DROP_BOTTLE**: Simulate dropping bottle in bin
-7. **DONE**: Task complete
+5. **APPROACH_BIN**: Move toward detected bin (with collision avoidance)
+6. **DROP_BOTTLE**: Simulate dropping bottle in bin (with safety checks)
+7. **EMERGENCY_STOP**: Emergency stop state when obstacles detected
+8. **DONE**: Task complete
 
 ## Integration with Bruno Modules
 
@@ -115,6 +121,8 @@ Supports multiple camera types:
 - **Local V4L2 cameras**: Uses OpenCV for capture
 - **Network cameras**: Uses FFmpeg for MJPEG streams
 - **Configurable parameters**: Resolution, FPS, horizontal flip
+- **Error recovery**: Automatic retry and recovery from camera failures
+- **Robust handling**: Graceful degradation when camera issues occur
 
 ## Testing
 
@@ -142,6 +150,39 @@ This creates:
 - `last_sent.jpg`: The image sent to GPT Vision API
 - `last_result.json`: The detection results from the API
 
+## Safety and Collision Avoidance
+
+### Safety Levels
+
+The system uses multiple safety levels:
+
+- **SAFE**: Normal operation, no obstacles detected
+- **CAUTION**: Obstacles detected, reduced speed and careful navigation
+- **DANGER**: Close obstacles, emergency stop may be triggered
+- **EMERGENCY**: Immediate stop required
+
+### Collision Avoidance Features
+
+- **Obstacle Detection**: Uses computer vision to detect walls, objects, and people
+- **Distance Estimation**: Estimates distance to obstacles using apparent size
+- **Path Planning**: Calculates safe directions to avoid obstacles
+- **Speed Limiting**: Automatically reduces speed based on safety level
+- **Emergency Stop**: Immediate stop when dangerous obstacles detected
+
+### Safety Configuration
+
+```json
+{
+  "collision_avoidance": {
+    "safe_distance": 100,
+    "caution_distance": 150,
+    "danger_distance": 80,
+    "enable_emergency_stop": true,
+    "enable_speed_limiting": true
+  }
+}
+```
+
 ## Fallback Behavior
 
 If the OpenAI API is unavailable or fails:
@@ -149,6 +190,7 @@ If the OpenAI API is unavailable or fails:
 1. **Local Detection**: Falls back to Bruno's local OpenCV-based bottle detector
 2. **No Bin Detection**: Local detector only finds bottles, not bins
 3. **Graceful Degradation**: System continues to operate with reduced functionality
+4. **Obstacle Detection**: Local obstacle detection continues to work for safety
 
 ## Cost Considerations
 
@@ -185,12 +227,26 @@ If the OpenAI API is unavailable or fails:
    ```
    Solution: Install FFmpeg for network camera support
 
+5. **Emergency Stop Triggered**
+   ```
+   [EMERGENCY] Obstacle detected - stopping robot
+   ```
+   Solution: Clear obstacles from robot's path or wait for automatic recovery
+
+6. **Camera Failures**
+   ```
+   Too many consecutive camera failures
+   ```
+   Solution: Check camera connection and restart the system
+
 ### Performance Tuning
 
 - **Detection Interval**: Increase `--gpt-interval` to reduce API costs
 - **Image Quality**: Lower JPEG quality in `encode_jpeg_from_bgr()` to reduce bandwidth
 - **Camera FPS**: Lower FPS reduces processing load
 - **Movement Speed**: Adjust speed parameters in configuration
+- **Safety Distances**: Adjust collision avoidance distances for your environment
+- **Emergency Stop Timeout**: Modify timeout for automatic recovery from emergency stops
 
 ## Example Workflow
 

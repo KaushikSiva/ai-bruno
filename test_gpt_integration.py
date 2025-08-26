@@ -98,6 +98,11 @@ def test_robot_controller_creation():
             },
             'head_control': {
                 'enabled': True
+            },
+            'collision_avoidance': {
+                'safe_distance': 100,
+                'caution_distance': 150,
+                'danger_distance': 80
             }
         }
         
@@ -106,6 +111,38 @@ def test_robot_controller_creation():
         return True
     except Exception as e:
         print(f"✗ Robot controller creation failed: {e}")
+        return False
+
+def test_collision_avoidance():
+    """Test collision avoidance system"""
+    print("Testing collision avoidance system...")
+    try:
+        from gpt import CollisionAvoidance, SafetyLevel
+        
+        config = {
+            'collision_avoidance': {
+                'safe_distance': 100,
+                'caution_distance': 150,
+                'danger_distance': 80
+            }
+        }
+        
+        collision_system = CollisionAvoidance(config)
+        print("✓ Collision avoidance system created successfully")
+        
+        # Test safety level determination
+        from gpt import ObstacleInfo
+        obstacles = [
+            ObstacleInfo(distance=50, angle=0, confidence=0.8, type="wall"),
+            ObstacleInfo(distance=200, angle=30, confidence=0.6, type="object")
+        ]
+        
+        safety_level = collision_system.check_safety(obstacles)
+        print(f"✓ Safety level determination works: {safety_level}")
+        
+        return True
+    except Exception as e:
+        print(f"✗ Collision avoidance test failed: {e}")
         return False
 
 def main():
@@ -126,7 +163,8 @@ def main():
     tests = [
         test_gpt_detector_creation,
         test_camera_creation,
-        test_robot_controller_creation
+        test_robot_controller_creation,
+        test_collision_avoidance
     ]
     
     passed = 0

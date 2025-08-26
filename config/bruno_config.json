@@ -109,5 +109,21 @@
         "approach_bottles_automatically": true,
         "stop_on_reach": true,
         "max_detection_responses": 5
+    },
+    "collision_avoidance": {
+        "safe_distance": 100,
+        "caution_distance": 150,
+        "danger_distance": 80,
+        "min_safe_speed": 0.1,
+        "max_safe_speed": 0.4,
+        "obstacle_check_interval": 0.5,
+        "emergency_stop_timeout": 5.0,
+        "enable_obstacle_detection": true,
+        "enable_emergency_stop": true,
+        "enable_speed_limiting": true
+    },
+    "camera": {
+        "max_camera_failures": 10,
+        "max_recovery_attempts": 3
     }
 }
