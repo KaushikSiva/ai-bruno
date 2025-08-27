@@ -1,9 +1,0 @@
-{
-  "bottle_present": false,
-  "bottle_bbox": null,
-  "bottle_conf": 0.0,
-  "bin_present": false,
-  "bin_bbox": null,
-  "bin_conf": 0.0,
-  "obstacles_count": 5
-}
