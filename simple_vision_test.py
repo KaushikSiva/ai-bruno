@@ -61,26 +61,39 @@ def setup_camera():
         return None
 
 def capture_image_from_camera(cap):
-    """Capture a fresh image from the camera"""
+    """Capture a fresh image from the camera with aggressive buffer clearing"""
     if cap is None:
         print("No camera available")
         return None
     
     print("Capturing fresh image from camera...")
     
-    # Flush camera buffer to get the most recent frame
-    print("Flushing camera buffer...")
-    for i in range(5):
+    # Aggressive buffer flush for IP cameras
+    print("Aggressive buffer flush...")
+    last_frame_hash = None
+    for i in range(10):
         ret, frame = cap.read()
-        if ret:
-            print(f"   Flushed frame {i+1}/5")
-        time.sleep(0.05)  # Small delay
+        if ret and frame is not None:
+            print(f"   Flushing frame {i+1}/10")
+            # Check if frame is different
+            frame_hash = hash(frame.tobytes())
+            if last_frame_hash and frame_hash != last_frame_hash:
+                print(f"   ✓ New frame detected at flush {i+1}")
+            last_frame_hash = frame_hash
+        time.sleep(0.2)  # Longer delay for IP cameras
+    
+    # Wait extra time for fresh frame
+    time.sleep(0.5)
     
     # Capture the actual fresh frame
-    print("Capturing actual image...")
+    print("Capturing final fresh image...")
     ret, frame = cap.read()
-    if ret:
+    if ret and frame is not None:
         print("✓ Fresh frame captured")
+        
+        # Show frame hash for verification
+        frame_hash = hash(frame.tobytes())
+        print(f"Frame hash: {frame_hash % 10000}")
         
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

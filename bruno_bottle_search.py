@@ -130,24 +130,53 @@ class BottleSearcher:
             self.hardware_available = False
     
     def capture_image(self):
-        """Capture fresh image from camera"""
+        """Capture fresh image from camera with proper buffer clearing"""
         if not self.cap:
             return None
         
         print("📸 Capturing FRESH image for bottle detection...")
         
-        # Flush camera buffer by reading multiple frames
-        print("🔄 Flushing camera buffer...")
-        for i in range(5):
+        # For IP cameras, we need to restart the connection to get fresh frames
+        current_source = None
+        if hasattr(self.cap, 'source'):
+            current_source = self.cap.source
+        
+        # Aggressive buffer clearing with longer delays for IP cameras
+        print("🔄 Aggressive buffer flush...")
+        for i in range(10):  # More flushes
             ret, frame = self.cap.read()
             if ret:
-                print(f"   Flushed frame {i+1}/5")
-            time.sleep(0.1)  # Small delay between frames
+                print(f"   Flushing frame {i+1}/10")
+                # Add frame difference check to ensure we're getting different frames
+                if i > 0 and frame is not None:
+                    # Quick frame comparison
+                    frame_hash = hash(frame.tobytes())
+                    if not hasattr(self, 'last_frame_hash'):
+                        self.last_frame_hash = frame_hash
+                    elif frame_hash != self.last_frame_hash:
+                        print(f"   ✓ New frame detected at flush {i+1}")
+                        self.last_frame_hash = frame_hash
+            time.sleep(0.2)  # Longer delay for IP cameras
+        
+        # Wait a bit more to ensure fresh frame
+        time.sleep(0.5)
         
         # Now capture the actual image
-        print("📷 Capturing actual image...")
+        print("📷 Capturing final fresh image...")
         ret, frame = self.cap.read()
-        if ret:
+        if ret and frame is not None:
+            # Verify this frame is different from previous
+            current_hash = hash(frame.tobytes())
+            if hasattr(self, 'last_captured_hash'):
+                if current_hash == self.last_captured_hash:
+                    print("⚠️  Frame appears identical to previous - trying one more capture...")
+                    time.sleep(0.3)
+                    ret, frame = self.cap.read()
+                    if ret:
+                        current_hash = hash(frame.tobytes())
+            
+            self.last_captured_hash = current_hash
+            
             # Convert BGR to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(rgb_frame)
@@ -157,7 +186,7 @@ class BottleSearcher:
             milliseconds = int(time.time() * 1000) % 1000
             filename = f"bottle_search_{timestamp}_{milliseconds:03d}.jpg"
             image.save(filename)
-            print(f"✓ Fresh image saved: {filename}")
+            print(f"✓ Fresh image saved: {filename} (hash: {current_hash % 10000})")
             return image
         else:
             print("✗ Failed to capture fresh image")
