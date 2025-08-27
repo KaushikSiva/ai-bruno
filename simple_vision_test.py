@@ -6,6 +6,7 @@ Captures image from camera and tests OpenAI Vision API.
 
 import os
 import sys
+import time
 import base64
 import io
 
@@ -60,30 +61,36 @@ def setup_camera():
         return None
 
 def capture_image_from_camera(cap):
-    """Capture an image from the camera"""
+    """Capture a fresh image from the camera"""
     if cap is None:
         print("No camera available")
         return None
     
-    print("Capturing image from camera...")
+    print("Capturing fresh image from camera...")
     
-    # Capture multiple frames to ensure we get a good one
+    # Flush camera buffer to get the most recent frame
+    print("Flushing camera buffer...")
     for i in range(5):
         ret, frame = cap.read()
         if ret:
-            print(f"✓ Frame captured (attempt {i+1})")
-            
-            # Convert BGR to RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Convert to PIL Image
-            image = Image.fromarray(rgb_frame)
-            return image
-        else:
-            print(f"✗ Frame capture failed (attempt {i+1})")
+            print(f"   Flushed frame {i+1}/5")
+        time.sleep(0.05)  # Small delay
     
-    print("Failed to capture frame after 5 attempts")
-    return None
+    # Capture the actual fresh frame
+    print("Capturing actual image...")
+    ret, frame = cap.read()
+    if ret:
+        print("✓ Fresh frame captured")
+        
+        # Convert BGR to RGB
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Convert to PIL Image
+        image = Image.fromarray(rgb_frame)
+        return image
+    else:
+        print("✗ Failed to capture fresh frame")
+        return None
 
 def encode_image_for_gpt(image):
     """Encode PIL image to base64 for GPT Vision"""

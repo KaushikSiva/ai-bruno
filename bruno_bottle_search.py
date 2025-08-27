@@ -130,29 +130,38 @@ class BottleSearcher:
             self.hardware_available = False
     
     def capture_image(self):
-        """Capture image from camera"""
+        """Capture fresh image from camera"""
         if not self.cap:
             return None
         
-        print("📸 Capturing image for bottle detection...")
+        print("📸 Capturing FRESH image for bottle detection...")
         
-        # Capture a few frames to get a good one
-        for i in range(3):
+        # Flush camera buffer by reading multiple frames
+        print("🔄 Flushing camera buffer...")
+        for i in range(5):
             ret, frame = self.cap.read()
             if ret:
-                # Convert BGR to RGB
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(rgb_frame)
-                
-                # Save image with timestamp
-                timestamp = time.strftime("%H%M%S")
-                filename = f"bottle_search_{timestamp}.jpg"
-                image.save(filename)
-                print(f"✓ Image saved: {filename}")
-                return image
+                print(f"   Flushed frame {i+1}/5")
+            time.sleep(0.1)  # Small delay between frames
         
-        print("✗ Failed to capture image")
-        return None
+        # Now capture the actual image
+        print("📷 Capturing actual image...")
+        ret, frame = self.cap.read()
+        if ret:
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image = Image.fromarray(rgb_frame)
+            
+            # Save image with more precise timestamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            milliseconds = int(time.time() * 1000) % 1000
+            filename = f"bottle_search_{timestamp}_{milliseconds:03d}.jpg"
+            image.save(filename)
+            print(f"✓ Fresh image saved: {filename}")
+            return image
+        else:
+            print("✗ Failed to capture fresh image")
+            return None
     
     def check_for_bottle(self, image):
         """Use GPT Vision to check for plastic bottles"""
