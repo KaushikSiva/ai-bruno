@@ -72,6 +72,10 @@ class BottleSearcher:
         self.direction_change_interval = 3  # Change direction every 3 seconds
         self.current_direction = "forward"
         
+        # Status display
+        self.last_status_update = 0
+        self.status_interval = 10  # Show status every 10 seconds
+        
         print("🔍 Bruno Bottle Searcher initialized")
         print("• Moves randomly avoiding obstacles")
         print("• Checks for bottles every 30 seconds")
@@ -256,8 +260,8 @@ class BottleSearcher:
                 self.head_controller.nod_yes(repetitions=2)
             except Exception as e:
                 print(f"Head nod failed: {e}")
-        else:
-            print("🙋 [SIM] Nodding acknowledgment")
+        # Remove simulation message to reduce clutter
+        pass
     
     def describe_photo(self, image):
         """Get photo description from GPT Vision"""
@@ -364,7 +368,7 @@ class BottleSearcher:
     def move_robot(self, direction, duration=0.3):
         """Move robot in specified direction"""
         if not self.hardware_available or not self.movement:
-            print(f"[SIM] Moving {direction} for {duration}s")
+            # Don't print simulation movement to reduce clutter
             return
         
         try:
@@ -397,8 +401,7 @@ class BottleSearcher:
         """Stop robot movement"""
         if self.hardware_available and self.movement:
             self.movement.stop()
-        else:
-            print("[SIM] Robot stopped")
+        # Remove simulation message to reduce clutter
     
     def get_random_direction(self):
         """Get random movement direction for exploration"""
@@ -418,7 +421,9 @@ class BottleSearcher:
             self.current_direction = self.get_random_direction()
             self.last_direction_change = current_time
             self.direction_change_interval = random.uniform(2, 5)  # Random interval
-            print(f"🔄 Direction: {self.current_direction}")
+            # Only print direction changes occasionally to reduce clutter
+            if random.random() < 0.3:  # 30% chance to print
+                print(f"\n🔄 Direction: {self.current_direction}")
         
         return self.current_direction
     
@@ -463,6 +468,7 @@ class BottleSearcher:
             self.running = True
             self.last_check_time = time.time()
             self.last_direction_change = time.time()
+            self.last_status_update = time.time()
             
             while self.running and not self.bottle_found:
                 current_time = time.time()
@@ -471,6 +477,12 @@ class BottleSearcher:
                 if self.check_for_stop_key():
                     print("\n🛑 Stop key pressed - shutting down")
                     break
+                
+                # Show exploration status periodically
+                if current_time - self.last_status_update >= self.status_interval:
+                    time_until_next_check = int(self.check_interval - (current_time - self.last_check_time))
+                    print(f"\n🚶 Exploring... (next bottle check in {time_until_next_check}s)")
+                    self.last_status_update = current_time
                 
                 # Check for bottle every 30 seconds
                 if current_time - self.last_check_time >= self.check_interval:
