@@ -53,7 +53,7 @@ class BottleSearcher:
         # Control variables
         self.running = False
         self.last_check_time = 0
-        self.check_interval = 10  # seconds
+        self.check_interval = 30  # seconds - changed from 10 to 30
         self.bottle_found = False
         
         # Movement control
@@ -63,8 +63,9 @@ class BottleSearcher:
         
         print("🔍 Bruno Bottle Searcher initialized")
         print("• Moves randomly avoiding obstacles")
-        print("• Checks for bottles every 10 seconds")
+        print("• Checks for bottles every 30 seconds")
         print("• Stops when plastic bottle found")
+        print("• Rate limit: 2 GPT requests per minute")
     
     def setup_openai(self):
         """Setup OpenAI client"""
@@ -270,8 +271,12 @@ class BottleSearcher:
             return description
             
         except APIError as e:
-            print(f"✗ OpenAI API error: {e}")
-            return None
+            if "429" in str(e) or "Too Many Requests" in str(e):
+                print("❌ No photo captured. (Rate limit reached)")
+                return "Rate limit exceeded"
+            else:
+                print(f"✗ OpenAI API error: {e}")
+                return None
         except Exception as e:
             print(f"✗ Description error: {e}")
             return None
@@ -317,8 +322,12 @@ class BottleSearcher:
             return result == "YES"
             
         except APIError as e:
-            print(f"✗ OpenAI API error: {e}")
-            return False
+            if "429" in str(e) or "Too Many Requests" in str(e):
+                print("❌ No photo captured. (Rate limit reached)")
+                return False
+            else:
+                print(f"✗ OpenAI API error: {e}")
+                return False
         except Exception as e:
             print(f"✗ Vision error: {e}")
             return False
@@ -401,7 +410,8 @@ class BottleSearcher:
         print("🔍 BRUNO BOTTLE SEARCH MODE")
         print("=" * 50)
         print("• Random movement with obstacle avoidance")
-        print("• Checks for plastic bottles every 10 seconds")
+        print("• Checks for plastic bottles every 30 seconds")  
+        print("• 2 GPT requests per minute (rate limit safe)")
         print("• Stops when bottle found")
         print("• Press 'x' to stop manually")
         print("=" * 50)
@@ -423,7 +433,7 @@ class BottleSearcher:
                     print("\n🛑 Stop key pressed - shutting down")
                     break
                 
-                # Check for bottle every 10 seconds
+                # Check for bottle every 30 seconds
                 if current_time - self.last_check_time >= self.check_interval:
                     print(f"\n⏰ Bottle check time! ({self.check_interval}s interval)")
                     
