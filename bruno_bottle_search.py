@@ -12,10 +12,21 @@ import time
 import base64
 import io
 import threading
-import select
-import termios
-import tty
 import random
+
+# Windows-compatible imports
+try:
+    import select
+    import termios
+    import tty
+    UNIX_TERMINAL = True
+except ImportError:
+    # Windows doesn't have these modules
+    UNIX_TERMINAL = False
+    try:
+        import msvcrt
+    except ImportError:
+        pass
 
 from PIL import Image
 
@@ -151,64 +162,82 @@ class BottleSearcher:
             self.head_controller = None
             self.hardware_available = False
     
-    def capture_image(self):
-        """Capture fresh image from camera with proper buffer clearing"""
-        if not self.cap:
-            return None
+    def reconnect_camera(self):
+        """Reconnect to camera to ensure fresh stream"""
+        print("🔌 Reconnecting to camera for fresh stream...")
         
+        if self.cap:
+            self.cap.release()
+            time.sleep(0.5)  # Wait for release
+        
+        # Try the same camera sources as initialization
+        camera_sources = [
+            'http://127.0.0.1:8080?action=stream',
+            'http://localhost:8080?action=stream',
+            0, 1, 2
+        ]
+        
+        for source in camera_sources:
+            cap = cv2.VideoCapture(source)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FPS, 30)
+                
+                # Test capture to ensure it works
+                ret, frame = cap.read()
+                if ret:
+                    print(f"✓ Camera reconnected: {source}")
+                    self.cap = cap
+                    return True
+                else:
+                    cap.release()
+        
+        print("✗ Camera reconnection failed")
+        return False
+    
+    def capture_image(self):
+        """Capture genuinely fresh image by reconnecting to camera"""
         print("📸 Capturing FRESH image for bottle detection...")
         
-        # For IP cameras, we need to restart the connection to get fresh frames
-        current_source = None
-        if hasattr(self.cap, 'source'):
-            current_source = self.cap.source
+        # Force camera reconnection for fresh stream
+        if not self.reconnect_camera():
+            print("✗ Camera reconnection failed")
+            return None
         
-        # Aggressive buffer clearing with longer delays for IP cameras
-        print("🔄 Aggressive buffer flush...")
-        for i in range(10):  # More flushes
+        # Wait for camera to stabilize after reconnection
+        print("⏳ Stabilizing camera after reconnection...")
+        time.sleep(1.0)
+        
+        # Clear any buffered frames from the new connection
+        print("🔄 Clearing initial frames from fresh connection...")
+        for i in range(5):
             ret, frame = self.cap.read()
             if ret:
-                print(f"   Flushing frame {i+1}/10")
-                # Add frame difference check to ensure we're getting different frames
-                if i > 0 and frame is not None:
-                    # Quick frame comparison
-                    frame_hash = hash(frame.tobytes())
-                    if not hasattr(self, 'last_frame_hash'):
-                        self.last_frame_hash = frame_hash
-                    elif frame_hash != self.last_frame_hash:
-                        print(f"   ✓ New frame detected at flush {i+1}")
-                        self.last_frame_hash = frame_hash
-            time.sleep(0.2)  # Longer delay for IP cameras
+                print(f"   Clearing frame {i+1}/5")
+            time.sleep(0.1)
         
-        # Wait a bit more to ensure fresh frame
-        time.sleep(0.5)
-        
-        # Now capture the actual image
+        # Now capture the actual fresh image
         print("📷 Capturing final fresh image...")
         ret, frame = self.cap.read()
         if ret and frame is not None:
-            # Verify this frame is different from previous
-            current_hash = hash(frame.tobytes())
-            if hasattr(self, 'last_captured_hash'):
-                if current_hash == self.last_captured_hash:
-                    print("⚠️  Frame appears identical to previous - trying one more capture...")
-                    time.sleep(0.3)
-                    ret, frame = self.cap.read()
-                    if ret:
-                        current_hash = hash(frame.tobytes())
+            print("✓ Fresh frame captured from new connection")
             
-            self.last_captured_hash = current_hash
+            # Show frame info for verification
+            frame_hash = hash(frame.tobytes())
+            frame_mean = frame.mean()
+            print(f"Frame stats - Hash: {frame_hash % 10000}, Mean: {frame_mean:.1f}")
             
             # Convert BGR to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(rgb_frame)
             
-            # Save image with more precise timestamp
+            # Save image with timestamp
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             milliseconds = int(time.time() * 1000) % 1000
             filename = f"bottle_search_{timestamp}_{milliseconds:03d}.jpg"
             image.save(filename)
-            print(f"✓ Fresh image saved: {filename} (hash: {current_hash % 10000})")
+            print(f"✓ Fresh image saved: {filename}")
             
             # Acknowledgment nod and announcement
             print("📸 PHOTO TAKEN!")
@@ -396,10 +425,17 @@ class BottleSearcher:
     def check_for_stop_key(self):
         """Check if 'x' key is pressed (non-blocking)"""
         try:
-            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                char = sys.stdin.read(1)
-                if char.lower() == 'x':
-                    return True
+            if UNIX_TERMINAL:
+                if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+                    char = sys.stdin.read(1)
+                    if char.lower() == 'x':
+                        return True
+            else:
+                # Windows version using msvcrt
+                if msvcrt.kbhit():
+                    char = msvcrt.getch().decode('utf-8').lower()
+                    if char == 'x':
+                        return True
         except:
             pass
         return False
@@ -416,10 +452,13 @@ class BottleSearcher:
         print("• Press 'x' to stop manually")
         print("=" * 50)
         
-        # Setup terminal for non-blocking input
-        old_settings = termios.tcgetattr(sys.stdin)
+        # Setup terminal for non-blocking input (Unix only)
+        old_settings = None
+        if UNIX_TERMINAL:
+            old_settings = termios.tcgetattr(sys.stdin)
         try:
-            tty.setraw(sys.stdin.fileno())
+            if UNIX_TERMINAL:
+                tty.setraw(sys.stdin.fileno())
             
             self.running = True
             self.last_check_time = time.time()
@@ -475,8 +514,9 @@ class BottleSearcher:
         except Exception as e:
             print(f"\n❌ Error: {e}")
         finally:
-            # Restore terminal settings
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            # Restore terminal settings (Unix only)
+            if UNIX_TERMINAL and old_settings:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
             self.cleanup()
     
     def cleanup(self):
