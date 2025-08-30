@@ -38,6 +38,7 @@ except ImportError:
 
 try:
     from robot_control.movement_controller import MovementController
+    from robot_control.head_controller import HeadController
     BRUNO_MODULES_AVAILABLE = True
 except ImportError:
     print("Warning: Bruno movement controller not available - simulation mode")
@@ -109,9 +110,10 @@ class BottleSearcher:
             sys.exit(1)
     
     def setup_movement(self):
-        """Setup movement controller"""
+        """Setup movement and head controllers"""
         if BRUNO_MODULES_AVAILABLE:
             try:
+                # Setup movement controller
                 config = {
                     'max_speed': 50,  # Medium speed for searching
                     'min_speed': 20,
@@ -119,14 +121,33 @@ class BottleSearcher:
                     'movement_timeout': 0.5
                 }
                 self.movement = MovementController(config)
+                
+                # Setup head controller
+                head_config = {
+                    'head_servo': {
+                        'id': 2,
+                        'positions': {
+                            'center': 1500,
+                            'up': 1300,
+                            'down': 1700
+                        },
+                        'timings': {
+                            'normal_movement': 0.5
+                        }
+                    }
+                }
+                self.head_controller = HeadController(head_config)
+                
                 self.hardware_available = True
-                print("✓ Movement controller initialized")
+                print("✓ Movement and head controllers initialized")
             except Exception as e:
                 print(f"Warning: Hardware not available - {e}")
                 self.movement = None
+                self.head_controller = None
                 self.hardware_available = False
         else:
             self.movement = None
+            self.head_controller = None
             self.hardware_available = False
     
     def capture_image(self):
@@ -187,9 +208,72 @@ class BottleSearcher:
             filename = f"bottle_search_{timestamp}_{milliseconds:03d}.jpg"
             image.save(filename)
             print(f"✓ Fresh image saved: {filename} (hash: {current_hash % 10000})")
+            
+            # Acknowledgment nod and announcement
+            print("📸 PHOTO TAKEN!")
+            self.acknowledge_photo()
+            
             return image
         else:
             print("✗ Failed to capture fresh image")
+            return None
+    
+    def acknowledge_photo(self):
+        """Nod to acknowledge photo taken"""
+        if self.hardware_available and self.head_controller:
+            try:
+                print("🙋 Nodding acknowledgment...")
+                self.head_controller.nod_yes(repetitions=2)
+            except Exception as e:
+                print(f"Head nod failed: {e}")
+        else:
+            print("🙋 [SIM] Nodding acknowledgment")
+    
+    def describe_photo(self, image):
+        """Get photo description from GPT Vision"""
+        try:
+            # Encode image to base64
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=85)
+            jpeg_data = buffer.getvalue()
+            base64_data = base64.b64encode(jpeg_data).decode('utf-8')
+            image_data = f"data:image/jpeg;base64,{base64_data}"
+            
+            print("🤖 Getting photo description...")
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text", 
+                                "text": "Describe what you see in this image in 1-2 sentences. Focus on the main objects, environment, and any notable features."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": image_data,
+                                    "detail": "low"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=100,
+                temperature=0.1
+            )
+            
+            description = response.choices[0].message.content.strip()
+            print(f"\n📋 PHOTO DESCRIPTION:")
+            print(f"   {description}\n")
+            return description
+            
+        except APIError as e:
+            print(f"✗ OpenAI API error: {e}")
+            return None
+        except Exception as e:
+            print(f"✗ Description error: {e}")
             return None
     
     def check_for_bottle(self, image):
@@ -347,9 +431,13 @@ class BottleSearcher:
                     self.stop_robot()
                     time.sleep(0.5)  # Brief pause
                     
-                    # Capture and check for bottle
+                    # Capture and analyze photo
                     image = self.capture_image()
                     if image:
+                        # Get photo description first
+                        self.describe_photo(image)
+                        
+                        # Then check for bottle
                         bottle_detected = self.check_for_bottle(image)
                         if bottle_detected:
                             print("\n" + "=" * 50)
