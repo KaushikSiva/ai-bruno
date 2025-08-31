@@ -9,6 +9,8 @@ import time
 import signal
 import numpy as np
 import logging
+import json
+import os
 from typing import Dict, List, Optional, Tuple
 
 # Optional pandas import for data smoothing
@@ -83,15 +85,62 @@ class BrunoObstacleAvoidance:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
     
+    def load_camera_config(self) -> Dict:
+        """Load camera configuration from config file"""
+        config_file = "config/bruno_config.json"
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                    return config.get('camera', {})
+            except Exception as e:
+                self.logger.warning(f"Could not load camera config: {e}")
+        return {}
+    
     def initialize_camera(self) -> bool:
-        """Initialize camera connection"""
+        """Initialize camera connection with support for USB cameras and streams"""
         try:
-            self.cap = cv2.VideoCapture(self.camera_url)
-            if not self.cap.isOpened():
-                self.logger.error("❌ Failed to open camera")
-                return False
-            self.logger.info("📹 Camera initialized successfully")
-            return True
+            # Load camera config
+            camera_config = self.load_camera_config()
+            device_id = camera_config.get('device_id', self.camera_url)
+            fallback_device_id = camera_config.get('fallback_device_id', 0)
+            
+            # Try primary camera source
+            self.logger.info(f"Trying primary camera: {device_id}")
+            
+            if isinstance(device_id, int):
+                # USB camera with DirectShow backend for Windows
+                self.cap = cv2.VideoCapture(device_id, cv2.CAP_DSHOW)
+            else:
+                # Stream URL
+                self.cap = cv2.VideoCapture(device_id)
+            
+            if self.cap.isOpened():
+                ret, frame = self.cap.read()
+                if ret:
+                    self.logger.info(f"📹 Primary camera initialized successfully: {device_id}")
+                    return True
+                else:
+                    self.cap.release()
+            
+            # Try fallback camera
+            self.logger.info(f"Trying fallback camera: {fallback_device_id}")
+            if isinstance(fallback_device_id, int):
+                self.cap = cv2.VideoCapture(fallback_device_id, cv2.CAP_DSHOW)
+            else:
+                self.cap = cv2.VideoCapture(fallback_device_id)
+            
+            if self.cap.isOpened():
+                ret, frame = self.cap.read()
+                if ret:
+                    self.logger.info(f"📹 Fallback camera initialized successfully: {fallback_device_id}")
+                    return True
+                else:
+                    self.cap.release()
+            
+            self.logger.error("❌ Failed to open any camera")
+            return False
+            
         except Exception as e:
             self.logger.error(f"❌ Camera initialization error: {e}")
             return False
@@ -468,7 +517,23 @@ if __name__ == '__main__':
             'danger_threshold': 120,
             'normal_speed': 35,
             'avoidance_speed': 25,
-            'camera_url': 'http://127.0.0.1:8080?action=stream'
+            'camera_url': 'http://127.0.0.1:8080?action=stream',
+            'detection_area': {            # Area of frame to check for obstacles
+                'top': 0.3,               # 30% from top
+                'bottom': 0.9,            # 90% from top  
+                'left': 0.1,              # 10% from left
+                'right': 0.9              # 90% from left
+            },
+            'turn_time': 1.0,              # Time to turn when avoiding
+            'backup_time': 0.8,            # Time to backup when obstacle detected
+            'movement': {                  # Movement controller config
+                'max_speed': 50,
+                'min_speed': 15
+            },
+            'navigation': {                # Navigation config
+                'forward_speed': 35,
+                'turn_speed': 30
+            }
         }
         
         bruno_avoidance = BrunoObstacleAvoidance(config)
