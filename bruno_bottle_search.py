@@ -275,7 +275,7 @@ class BottleSearcher:
             
             print("🤖 Getting photo description...")
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5",
                 messages=[
                     {
                         "role": "user",
@@ -326,7 +326,7 @@ class BottleSearcher:
             
             print("🤖 Checking for plastic bottles...")
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5",
                 messages=[
                     {
                         "role": "user",
