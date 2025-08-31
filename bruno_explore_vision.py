@@ -125,6 +125,16 @@ class BrunoExplorer:
             self.movement = None
             self.hardware_available = False
     
+    def capture_frame(self):
+        """Capture current frame from camera"""
+        if not self.cap:
+            return None
+        
+        ret, frame = self.cap.read()
+        if ret:
+            return frame
+        return None
+    
     def capture_image(self):
         """Capture image from camera"""
         if not self.cap:
