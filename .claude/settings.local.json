@@ -4,7 +4,9 @@
       "Bash(python test:*)",
       "Bash(python:*)",
       "Bash(timeout:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(find:*)",
+      "WebFetch(domain:docs.hiwonder.com)"
     ],
     "deny": [],
     "ask": []

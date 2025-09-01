@@ -83,6 +83,24 @@ class MovementController:
             self.logger.error(f"Error moving forward: {e}")
             self.stop()
     
+    def move_backward(self, speed: float):
+        """Move robot backward at specified speed"""
+        if not self.chassis:
+            self.logger.warning("Chassis not available - simulating movement")
+            return
+            
+        speed = max(self.min_speed, min(speed, self.max_speed))
+        
+        try:
+            # Move backward (270 degrees in mecanum coordinate system)
+            self.chassis.set_velocity(speed, 270, 0)
+            self.is_moving = True
+            self.last_movement_time = time.time()
+            self.logger.debug(f"Moving backward at speed {speed}")
+        except Exception as e:
+            self.logger.error(f"Error moving backward: {e}")
+            self.stop()
+    
     def turn(self, direction: str, speed: float):
         """Turn robot in specified direction"""
         if not self.chassis:

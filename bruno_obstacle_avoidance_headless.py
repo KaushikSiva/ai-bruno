@@ -310,8 +310,9 @@ class BrunoObstacleAvoidanceHeadless:
         self.stats['obstacles_detected'] += 1
         
         # Determine action based on distance
-        if smooth_distance >= self.danger_threshold:
-            # DANGER ZONE - Emergency stop
+        # NOTE: Lower distance values mean closer obstacles
+        if smooth_distance <= 50:  # Very close - emergency stop
+            # IMMEDIATE DANGER - Emergency stop
             self.last_obstacle_time = time.time()
             self.stats['emergency_stops'] += 1
             return {
@@ -320,10 +321,10 @@ class BrunoObstacleAvoidanceHeadless:
                 'speed': 0,
                 'emergency': True,
                 'distance': smooth_distance,
-                'message': f'DANGER: Obstacle at {smooth_distance:.1f}px'
+                'message': f'EMERGENCY: Very close obstacle at {smooth_distance:.1f}px'
             }
         
-        elif smooth_distance >= self.obstacle_threshold:
+        elif smooth_distance <= self.obstacle_threshold:  # Close - avoid
             # AVOIDANCE ZONE - Navigate around obstacle
             self.stats['avoidance_maneuvers'] += 1
             return self.plan_avoidance_maneuver(closest_obstacle, smooth_distance)
@@ -385,6 +386,15 @@ class BrunoObstacleAvoidanceHeadless:
         
         if action == 'EMERGENCY_STOP':
             self.movement.emergency_stop()
+            
+            # If we've been emergency stopping for a while, try to back away
+            if time.time() - self.last_obstacle_time > 2.0:
+                self.logger.info("🔄 Emergency stop timeout - attempting recovery backup")
+                self.movement.move_backward(20)
+                time.sleep(1.5)  # Back up for 1.5 seconds
+                self.movement.stop()
+                self.last_obstacle_time = time.time()  # Reset timer
+            
             self.logger.warning("🚨 EMERGENCY STOP")
         
         elif action == 'CONTINUE':
@@ -392,21 +402,33 @@ class BrunoObstacleAvoidanceHeadless:
             
         elif action == 'BACKUP_AND_TURN':
             # First backup
+            self.logger.info("⬅️ Backing up to avoid obstacle")
             self.movement.move_backward(speed)
             time.sleep(self.config['backup_time'])
             
             # Then turn
+            turn_direction = 'LEFT' if direction == 'LEFT' else 'RIGHT'
+            self.logger.info(f"🔄 Turning {turn_direction} to avoid obstacle")
             if direction == 'LEFT':
                 self.movement.turn('LEFT', speed)
             else:
                 self.movement.turn('RIGHT', speed)
             time.sleep(self.config['turn_time'])
             
+            # Stop after maneuver
+            self.movement.stop()
+            
         elif action == 'TURN_LEFT':
+            self.logger.info("🔄 Turning LEFT to avoid obstacle")
             self.movement.turn('LEFT', speed)
+            time.sleep(0.8)  # Turn for a bit
+            self.movement.stop()
             
         elif action == 'TURN_RIGHT':
+            self.logger.info("🔄 Turning RIGHT to avoid obstacle")
             self.movement.turn('RIGHT', speed)
+            time.sleep(0.8)  # Turn for a bit
+            self.movement.stop()
         
         self.logger.info(f"🤖 Action: {action} - {action_plan['message']}")
     
@@ -579,29 +601,29 @@ if __name__ == '__main__':
         
         # Create and run obstacle avoidance system
         config = {
-            'obstacle_threshold': 80,
-            'danger_threshold': 120,
-            'normal_speed': 35,
-            'avoidance_speed': 25,
+            'obstacle_threshold': 100,     # Start avoiding at 100px distance
+            'danger_threshold': 50,        # Emergency stop at 50px (very close)
+            'normal_speed': 30,            # Slower normal speed for safety
+            'avoidance_speed': 20,         # Slower avoidance speed
             'camera_url': 'http://127.0.0.1:8080?action=stream',
             'detection_area': {            # Area of frame to check for obstacles
-                'top': 0.3,               # 30% from top
+                'top': 0.4,               # 40% from top (focus on closer area)
                 'bottom': 0.9,            # 90% from top  
-                'left': 0.1,              # 10% from left
-                'right': 0.9              # 90% from left
+                'left': 0.2,              # 20% from left (narrower focus)
+                'right': 0.8              # 80% from left
             },
-            'turn_time': 1.0,              # Time to turn when avoiding
-            'backup_time': 0.8,            # Time to backup when obstacle detected
+            'turn_time': 1.2,              # Longer turn time for better avoidance
+            'backup_time': 1.0,            # Longer backup time
             'save_debug_images': True,     # Save debug images for analysis
-            'debug_image_interval': 30,    # Save every 30 frames
-            'status_report_interval': 100, # Status report every 100 frames
+            'debug_image_interval': 20,    # Save every 20 frames (more frequent)
+            'status_report_interval': 50,  # More frequent status reports
             'movement': {                  # Movement controller config
-                'max_speed': 50,
-                'min_speed': 15
+                'max_speed': 40,
+                'min_speed': 10
             },
             'navigation': {                # Navigation config
-                'forward_speed': 35,
-                'turn_speed': 30
+                'forward_speed': 30,
+                'turn_speed': 25
             }
         }
         
