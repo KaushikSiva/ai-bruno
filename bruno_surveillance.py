@@ -57,16 +57,34 @@ from kinematics.arm_move_ik import ArmIK
 # =========================
 # Config
 # =========================
+def _get_camera_sources():
+    """Get list of camera sources, checking which devices exist first"""
+    sources = []
+    
+    # 1. External camera from environment (highest priority)
+    stream_source = os.environ.get("STREAM_SOURCE")
+    if stream_source:
+        sources.append(stream_source)
+    
+    # 2. Built-in camera stream (for users with working built-in setup)
+    sources.append("http://127.0.0.1:8080?action=stream")
+    
+    # 3. Only add USB device indices that actually exist
+    for i in range(5):  # Check 0-4
+        if _check_device_exists(i):
+            sources.append(i)
+    
+    # 4. Only add device paths that exist
+    for i in range(5):  # Check /dev/video0-4
+        device_path = f"/dev/video{i}"
+        if os.path.exists(device_path):
+            sources.append(device_path)
+    
+    return sources
+
 CONFIG = {
     # Camera settings - AUTO-DETECT built-in vs external
-    "camera_sources": [
-        os.environ.get("STREAM_SOURCE", "0"),  # External camera from live_stream_test
-        "http://127.0.0.1:8080?action=stream",  # Built-in camera stream
-        0,  # USB camera device 0
-        1,  # USB camera device 1
-        "/dev/video0",  # V4L2 device 0
-        "/dev/video1",  # V4L2 device 1
-    ],
+    "camera_sources": [],  # Will be populated by _get_camera_sources()
     "autostart_local_stream": True,
     "stream_port": 8080,
     "stream_width": int(os.environ.get("STREAM_WIDTH", "1280")),
@@ -125,6 +143,14 @@ def _parse_source(val):
     except Exception:
         return val
 
+def _check_device_exists(device_id: int) -> bool:
+    """Check if a camera device exists without opening it fully"""
+    try:
+        device_path = f"/dev/video{device_id}"
+        return os.path.exists(device_path)
+    except Exception:
+        return False
+
 def _open_camera_source(source) -> Optional[cv2.VideoCapture]:
     """Open a camera source with multiple backend attempts"""
     LOG.info(f"Trying camera source: {source}")
@@ -134,11 +160,21 @@ def _open_camera_source(source) -> Optional[cv2.VideoCapture]:
     
     try:
         if isinstance(source, int):
-            # USB camera device - try V4L2 first, then default
-            cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
-            if not cap.isOpened():
-                cap.release()
-                cap = cv2.VideoCapture(source)
+            # Check if device exists first to avoid "Camera index out of range" error
+            if not _check_device_exists(source):
+                LOG.warning(f"Camera device {source} does not exist (/dev/video{source} not found)")
+                return None
+            
+            # USB camera device - try V4L2 first with error suppression
+            try:
+                cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
+                if not cap.isOpened():
+                    cap.release()
+                    cap = cv2.VideoCapture(source)
+            except Exception as e:
+                LOG.warning(f"Failed to open camera {source}: {e}")
+                return None
+                
         elif isinstance(source, str):
             if source.startswith(('http://', 'https://', 'rtsp://')):
                 # Network stream
@@ -147,37 +183,58 @@ def _open_camera_source(source) -> Optional[cv2.VideoCapture]:
                     cap.release()
                     cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
             else:
-                # File or device path
+                # File or device path - check if path exists first
+                if source.startswith('/dev/video'):
+                    if not os.path.exists(source):
+                        LOG.warning(f"Device path {source} does not exist")
+                        return None
+                
                 cap = cv2.VideoCapture(source)
                 if not cap.isOpened():
                     cap.release()
                     cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
         
         if cap and cap.isOpened():
-            # Set camera properties
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, CONFIG["stream_width"])
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CONFIG["stream_height"])
-            cap.set(cv2.CAP_PROP_FPS, CONFIG["stream_fps"])
+            # Set camera properties with error handling
+            try:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, CONFIG["stream_width"])
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CONFIG["stream_height"])
+                cap.set(cv2.CAP_PROP_FPS, CONFIG["stream_fps"])
+            except Exception as e:
+                LOG.warning(f"Could not set camera properties: {e}")
             
-            # Test read
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                LOG.info(f"✓ Camera source {source} working")
-                return cap
+            # Test read with timeout
+            try:
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    LOG.info(f"✓ Camera source {source} working ({frame.shape[1]}x{frame.shape[0]})")
+                    return cap
+                else:
+                    LOG.warning(f"Camera {source} opened but failed to read frame")
+            except Exception as e:
+                LOG.warning(f"Camera {source} test read failed: {e}")
         
         if cap:
             cap.release()
         return None
         
     except Exception as e:
-        LOG.warning(f"Camera source {source} failed: {e}")
+        LOG.warning(f"Camera source {source} failed with exception: {e}")
         if cap:
-            cap.release()
+            try:
+                cap.release()
+            except Exception:
+                pass
         return None
 
 def _find_working_camera() -> Optional[cv2.VideoCapture]:
     """Try all camera sources and return the first working one"""
     LOG.info("🔍 Auto-detecting camera...")
+    
+    # Initialize camera sources if not done yet
+    if not CONFIG["camera_sources"]:
+        CONFIG["camera_sources"] = _get_camera_sources()
+        LOG.info(f"Available camera sources: {CONFIG['camera_sources']}")
     
     for source in CONFIG["camera_sources"]:
         cap = _open_camera_source(source)
