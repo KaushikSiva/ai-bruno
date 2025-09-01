@@ -109,7 +109,7 @@ CONFIG = {
     "avoid_px": 110,
 
     # GPT Vision settings
-    "gpt_photo_interval": 10,  # Every 10 seconds
+    "gpt_photo_interval": 15,  # Every 15 seconds
     "gpt_vision_prompt": "Describe what you see in this image. Focus on: objects, furniture, rooms, people, pets, bottles, bins/containers, obstacles, walls, and the general environment. Be concise but detailed.",
     "save_gpt_images": True,
     
@@ -397,12 +397,13 @@ class GPTVision:
             LOG.error(f"✗ Failed to initialize OpenAI client: {e}")
             return
         
-        # Timing
-        self.last_photo_time = time.time()
+        # Timing - Start with taking immediate first photo
+        self.last_photo_time = 0  # Force immediate first photo
         self.photo_count = 0
         self.descriptions = []
+        self.surveillance_start_time = time.time()
         
-        LOG.info(f"✓ GPT Vision ready - first photo in {cfg['gpt_photo_interval']} seconds")
+        LOG.info("✓ GPT Vision ready - will take first photo immediately when started")
     
     def should_take_photo(self) -> bool:
         if not self.enabled:
@@ -412,10 +413,16 @@ class GPTVision:
         elapsed = current_time - self.last_photo_time
         should_take = elapsed >= self.cfg["gpt_photo_interval"]
         
-        # Log timing info every 5 seconds
-        if int(current_time) % 5 == 0:
+        # Special case: first photo immediately when surveillance starts
+        if self.photo_count == 0:
+            should_take = True
+            LOG.info("📸 Taking first surveillance photo immediately...")
+        
+        # Log countdown every 5 seconds (but not spam)
+        elif int(current_time) % 5 == 0 and elapsed > 5:
             remaining = self.cfg["gpt_photo_interval"] - elapsed
-            LOG.info(f"⏰ GPT Photo timing: {elapsed:.1f}s elapsed, {remaining:.1f}s remaining, should_take={should_take}")
+            if remaining > 0:
+                LOG.info(f"⏰ Next photo in {remaining:.0f} seconds...")
         
         return should_take
     
@@ -425,29 +432,33 @@ class GPTVision:
             return None
         
         try:
-            LOG.info("📸 TAKING GPT PHOTO NOW!")
+            # Immediately update timing to ensure fresh 15-second cycle
+            current_time = time.time()
+            self.photo_count += 1
             
-            # Convert frame
+            LOG.info(f"📸 CAPTURING FRESH PHOTO #{self.photo_count} - Action: {current_action}")
+            
+            # Convert current frame to RGB (FRESH capture, not reused)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(rgb_frame)
             
-            # Save image
+            # Save image with clear numbering
             if self.cfg.get("save_gpt_images", True):
                 os.makedirs("gpt_images", exist_ok=True)
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"gpt_images/bruno_surveillance_{timestamp}_{self.photo_count:04d}.jpg"
+                filename = f"gpt_images/surveillance_photo_{self.photo_count:03d}_{timestamp}.jpg"
                 image.save(filename)
-                LOG.info(f"💾 Image saved: {filename}")
+                LOG.info(f"💾 Fresh image #{self.photo_count} saved: {filename}")
             
-            # Encode for GPT
+            # Encode for GPT API
             buffer = io.BytesIO()
             image.save(buffer, format="JPEG", quality=85)
             jpeg_data = buffer.getvalue()
             base64_data = base64.b64encode(jpeg_data).decode('utf-8')
             image_data = f"data:image/jpeg;base64,{base64_data}"
             
-            # Send to GPT
-            LOG.info("🧠 Sending to GPT Vision API...")
+            # Send to GPT Vision
+            LOG.info(f"🧠 Sending photo #{self.photo_count} to GPT Vision API...")
             
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -475,33 +486,37 @@ class GPTVision:
             
             description = response.choices[0].message.content
             
-            # Update counters
-            self.photo_count += 1
-            self.last_photo_time = time.time()
+            # Reset timer AFTER successful GPT response to ensure exact 15-second intervals
+            self.last_photo_time = current_time
             
-            # Store description
+            # Store description with surveillance info
             description_entry = {
                 'timestamp': time.strftime("%H:%M:%S"),
                 'photo_count': self.photo_count,
                 'description': description,
-                'current_action': current_action
+                'current_action': current_action,
+                'surveillance_time': current_time - self.surveillance_start_time
             }
             self.descriptions.append(description_entry)
             
             # Display description
-            LOG.info("\n" + "=" * 70)
-            LOG.info("🔍 GPT VISION DESCRIPTION")
-            LOG.info("=" * 70)
-            LOG.info(f"Time: {description_entry['timestamp']} | Photo: #{self.photo_count} | Action: {current_action}")
+            LOG.info("\n" + "=" * 80)
+            LOG.info(f"🔍 SURVEILLANCE PHOTO #{self.photo_count} ANALYSIS")
+            LOG.info("=" * 80)
+            LOG.info(f"Time: {description_entry['timestamp']} | Action: {current_action}")
+            LOG.info(f"Surveillance Duration: {description_entry['surveillance_time']:.1f}s")
+            LOG.info("")
             LOG.info(description)
-            LOG.info("=" * 70)
-            LOG.info(f"✓ Next photo in {self.cfg['gpt_photo_interval']} seconds")
+            LOG.info("")
+            LOG.info("=" * 80)
+            LOG.info(f"✅ Photo analysis complete. Resuming surveillance for {self.cfg['gpt_photo_interval']} seconds...")
+            LOG.info("=" * 80)
             
             return description
             
         except Exception as e:
-            LOG.error(f"❌ GPT Vision error: {e}")
-            # Still reset timer to avoid getting stuck
+            LOG.error(f"❌ GPT Vision error on photo #{self.photo_count}: {e}")
+            # Reset timer even on error to continue surveillance cycle
             self.last_photo_time = time.time()
             return None
 
@@ -653,17 +668,18 @@ class BrunoSurveillanceSystem:
 
                 # ============ GPT VISION PHOTOS ============
                 if frame is not None and self.gpt_vision.should_take_photo():
-                    # Stop Bruno before taking picture
-                    LOG.info("🛑 Stopping Bruno for GPT photo...")
+                    # Stop Bruno for photo session
+                    LOG.info("🛑 STOPPING SURVEILLANCE for photo session...")
                     self.stop_all()
-                    time.sleep(0.2)  # Brief pause to ensure full stop
+                    time.sleep(0.3)  # Ensure complete stop
                     
-                    # Take photo and get GPT response
+                    # Take FRESH photo and get GPT analysis
                     description = self.gpt_vision.capture_and_describe(frame, current_action)
                     
-                    # Resume movement after GPT response
-                    LOG.info("▶️  Resuming Bruno movement after GPT photo...")
-                    continue  # Skip to next iteration to resume normal movement logic
+                    # Brief pause to show photo completed, then resume
+                    time.sleep(0.5)
+                    LOG.info(f"▶️  RESUMING SURVEILLANCE for next {self.cfg['gpt_photo_interval']} seconds...")
+                    continue  # Skip to next iteration to resume movement
 
                 # Same loop timing as working script
                 time.sleep(0.03)
