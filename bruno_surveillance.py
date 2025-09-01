@@ -442,13 +442,15 @@ class GPTVision:
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(rgb_frame)
             
-            # Save image with clear numbering
+            # Save image with clear numbering and microsecond timestamp
             if self.cfg.get("save_gpt_images", True):
                 os.makedirs("gpt_images", exist_ok=True)
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"gpt_images/surveillance_photo_{self.photo_count:03d}_{timestamp}.jpg"
+                microseconds = int((current_time * 1000000) % 1000000)
+                filename = f"gpt_images/surveillance_photo_{self.photo_count:03d}_{timestamp}_{microseconds:06d}.jpg"
                 image.save(filename)
                 LOG.info(f"💾 Fresh image #{self.photo_count} saved: {filename}")
+                LOG.info(f"📏 Image dimensions: {image.size[0]}x{image.size[1]} pixels")
             
             # Encode for GPT API
             buffer = io.BytesIO()
@@ -667,14 +669,37 @@ class BrunoSurveillanceSystem:
                     self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
 
                 # ============ GPT VISION PHOTOS ============
-                if frame is not None and self.gpt_vision.should_take_photo():
+                if self.cap and self.cap.isOpened() and self.gpt_vision.should_take_photo():
                     # Stop Bruno for photo session
                     LOG.info("🛑 STOPPING SURVEILLANCE for photo session...")
                     self.stop_all()
                     time.sleep(0.3)  # Ensure complete stop
                     
-                    # Take FRESH photo and get GPT analysis
-                    description = self.gpt_vision.capture_and_describe(frame, current_action)
+                    # Flush camera buffer and capture MULTIPLE FRESH frames
+                    LOG.info("🔄 Flushing camera buffer to ensure fresh image...")
+                    
+                    # Flush old frames from camera buffer (discard 3-5 frames)
+                    for flush_i in range(3):
+                        self.cap.read()  # Discard old buffered frames
+                        time.sleep(0.05)
+                    
+                    # Now capture FRESH frame
+                    fresh_frame = None
+                    for i in range(3):  # Try up to 3 times to get a fresh frame
+                        ok, fresh_frame = self.cap.read()
+                        if ok and fresh_frame is not None:
+                            LOG.info(f"✅ Got fresh frame on attempt {i+1}")
+                            break
+                        time.sleep(0.1)  # Small delay between attempts
+                    
+                    if fresh_frame is not None:
+                        LOG.info(f"📸 Captured FRESH frame for photo #{self.gpt_vision.photo_count + 1}")
+                        # Take photo with FRESH frame and get GPT analysis
+                        description = self.gpt_vision.capture_and_describe(fresh_frame, current_action)
+                    else:
+                        LOG.error("❌ Failed to capture fresh frame for photo")
+                        # Reset timer to continue surveillance cycle
+                        self.gpt_vision.last_photo_time = time.time()
                     
                     # Brief pause to show photo completed, then resume
                     time.sleep(0.5)
