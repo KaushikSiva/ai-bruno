@@ -506,7 +506,17 @@ class BrunoIntelligentExplorer:
 
                 # ============ GPT VISION (NEW) ============
                 if frame is not None and self.gpt_vision.should_take_photo():
+                    # Stop Bruno before taking picture
+                    LOG.info("🛑 Stopping Bruno for GPT photo...")
+                    self.stop_all()
+                    time.sleep(0.2)  # Brief pause to ensure full stop
+                    
+                    # Take photo and get GPT response
                     description = self.gpt_vision.capture_and_describe(frame, current_action)
+                    
+                    # Resume movement after GPT response
+                    LOG.info("▶️  Resuming Bruno movement after GPT photo...")
+                    continue  # Skip to next iteration to resume normal movement logic
 
                 # Same loop timing as headless_chicken.py
                 time.sleep(0.03)
