@@ -226,7 +226,6 @@ class VisionClient:
                 api_url = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
                 
                 # Convert image bytes to base64 for JSON payload
-                import base64
                 b64_image = base64.b64encode(img_bytes).decode('utf-8')
                 
                 # Try different payload formats
