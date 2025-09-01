@@ -6,7 +6,8 @@
       "Bash(timeout:*)",
       "Bash(sed:*)",
       "Bash(find:*)",
-      "WebFetch(domain:docs.hiwonder.com)"
+      "WebFetch(domain:docs.hiwonder.com)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

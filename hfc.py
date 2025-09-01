@@ -217,11 +217,74 @@ class VisionClient:
                 desc = data["choices"][0]["message"]["content"]
 
             elif self.provider == "free":
-                headers = {"Authorization": f"Bearer {self.api_key}"}
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Use the specific model you requested
                 api_url = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
-                resp = requests.post(api_url, headers=headers, data=img_bytes, timeout=30)
-                resp.raise_for_status(); result = resp.json()
-                desc = result[0].get("generated_text","") if isinstance(result,list) else str(result)
+                
+                # Convert image bytes to base64 for JSON payload
+                import base64
+                b64_image = base64.b64encode(img_bytes).decode('utf-8')
+                
+                # Try different payload formats
+                payload_formats = [
+                    # Format 1: Direct image data
+                    {"inputs": b64_image},
+                    # Format 2: Image URL format (if we had URL)
+                    # {"inputs": {"image": b64_image}},
+                    # Format 3: Parameters format
+                    {"inputs": b64_image, "parameters": {"max_length": 50}}
+                ]
+                
+                desc = None
+                for i, payload in enumerate(payload_formats):
+                    try:
+                        LOG.info(f"Trying HF API format {i+1}...")
+                        resp = requests.post(api_url, headers=headers, json=payload, timeout=30)
+                        resp.raise_for_status()
+                        result = resp.json()
+                        
+                        # Handle different response formats
+                        if isinstance(result, list) and len(result) > 0:
+                            if isinstance(result[0], dict) and 'generated_text' in result[0]:
+                                desc = result[0]['generated_text']
+                            elif isinstance(result[0], str):
+                                desc = result[0]
+                        elif isinstance(result, dict):
+                            desc = result.get('generated_text', '') or result.get('text', '') or str(result)
+                        
+                        if desc and desc.strip():
+                            LOG.info(f"✓ HF API success with format {i+1}")
+                            break
+                            
+                    except Exception as e:
+                        LOG.warning(f"HF API format {i+1} failed: {e}")
+                        if i == 0:  # For first failure, also try binary data
+                            try:
+                                LOG.info("Trying binary data format...")
+                                headers_binary = {"Authorization": f"Bearer {self.api_key}"}
+                                resp = requests.post(api_url, headers=headers_binary, data=img_bytes, timeout=30)
+                                resp.raise_for_status()
+                                result = resp.json()
+                                
+                                if isinstance(result, list) and len(result) > 0:
+                                    desc = result[0].get('generated_text', '') if isinstance(result[0], dict) else str(result[0])
+                                elif isinstance(result, dict):
+                                    desc = result.get('generated_text', '') or str(result)
+                                
+                                if desc and desc.strip():
+                                    LOG.info("✓ HF API success with binary format")
+                                    break
+                                    
+                            except Exception as e2:
+                                LOG.warning(f"Binary format also failed: {e2}")
+                        continue
+                
+                if not desc or not desc.strip():
+                    raise Exception("Hugging Face BLIP API failed with all formats")
 
             else:
                 desc = None
@@ -268,16 +331,58 @@ class BrunoIntelligentExplorer:
                     ok, frame = self.cap.read(); frame = frame if ok else None
 
                 d_cm = self.ultra.get_distance_cm()
-                current_action = "FORWARD"
+                
+                # ============ OBSTACLE AVOIDANCE & MOVEMENT ============
                 if d_cm and d_cm <= self.cfg["ultra_danger_cm"]:
-                    self.ultra.set_rgb(255,0,0); self.stop_all()
-                    LOG.warning(f"EMERGENCY STOP {d_cm:.1f}cm"); continue
+                    # EMERGENCY STOP
+                    self.ultra.set_rgb(255, 0, 0)  # red
+                    self.stop_all()
+                    current_action = f"EMERGENCY STOP ({d_cm:.1f}cm)"
+                    LOG.warning(current_action)
+                    time.sleep(0.05)
+                    continue
+                    
+                elif d_cm and d_cm <= self.cfg["ultra_caution_cm"]:
+                    # AVOIDANCE MANEUVER
+                    self.ultra.set_rgb(255, 180, 0)  # amber
+                    
+                    # Optional backup
+                    if self.cfg["backup_time"] > 0:
+                        self.car.set_velocity(self.cfg["turn_speed"], 90, 0)
+                        time.sleep(self.cfg["backup_time"])
+                        self.stop_all()
+                    
+                    # Alternate turn direction
+                    left = ((self.frame_idx // 60) % 2 == 0)
+                    self.car.set_velocity(0, 90, -0.5 if left else 0.5)
+                    time.sleep(self.cfg["turn_time"])
+                    self.stop_all()
+                    current_action = f"ULTRA AVOID ({d_cm:.1f}cm) {'LEFT' if left else 'RIGHT'}"
+                    LOG.info(current_action)
+                    time.sleep(0.05)
+                    continue
+                else:
+                    # SAFE TO MOVE FORWARD
+                    self.ultra.set_rgb(0, 255, 0)  # green
+                    self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
+                    current_action = "FORWARD (safe)"
+                    LOG.info(f"[ULTRA] {d_cm:.1f}cm - {current_action}")
 
+                # ============ GPT VISION PHOTOS ============
                 if frame is not None and self.vision_client.should_take_photo():
-                    self.stop_all(); time.sleep(0.2)
+                    # Stop Bruno before taking picture
+                    self.stop_all()
+                    time.sleep(0.2)
+                    LOG.info("📸 Taking GPT photo...")
+                    
+                    # Take photo and get GPT response
                     self.vision_client.capture_and_describe(frame, current_action)
-                    LOG.info("▶️ Resume after photo"); continue
-                time.sleep(0.05)
+                    
+                    # Resume movement after GPT response
+                    LOG.info("▶️ Resuming Bruno movement after photo...")
+                    continue  # Skip to next iteration to resume normal movement
+                
+                time.sleep(0.03)
         except KeyboardInterrupt:
             pass
         finally: self.shutdown()
