@@ -1,0 +1,41 @@
+{
+  "session_start": "2025-09-01 10:46:07",
+  "session_end": "2025-09-01 10:47:14",
+  "total_runtime": 66.99234437942505,
+  "statistics": {
+    "frames_processed": 4,
+    "ultrasonic_readings": 3,
+    "emergency_stops": 0,
+    "ultrasonic_avoids": 1,
+    "vision_avoids": 0,
+    "gpt_photos_taken": 0,
+    "gpt_descriptions_received": 0
+  },
+  "config": {
+    "camera_url": "http://127.0.0.1:8080?action=stream",
+    "autostart_local_stream": true,
+    "stream_port": 8080,
+    "ultra_caution_cm": 50.0,
+    "ultra_danger_cm": 25.0,
+    "forward_speed": 40,
+    "turn_speed": 40,
+    "turn_time": 0.5,
+    "backup_time": 0.0,
+    "use_vision": true,
+    "roi": {
+      "top": 0.5,
+      "bottom": 0.95,
+      "left": 0.15,
+      "right": 0.85
+    },
+    "edge_min_area": 800,
+    "danger_px": 70,
+    "avoid_px": 110,
+    "gpt_photo_interval": 20,
+    "gpt_vision_prompt": "Describe what you see in this image. Focus on: objects, furniture, rooms, people, pets, bottles, bins/containers, obstacles, walls, and the general environment. Be concise but detailed.",
+    "save_gpt_images": true,
+    "save_debug": true,
+    "debug_interval": 30
+  },
+  "gpt_descriptions": []
+}
