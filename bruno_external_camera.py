@@ -334,26 +334,52 @@ class GPTVision:
         self.enabled = False
         self.client = None
         
+        LOG.info("🔍 Initializing GPT Vision...")
+        
         # Check API key and initialize
         api_key = os.environ.get("OPENAI_API_KEY")
+        LOG.info(f"📋 OPENAI_API_KEY status: {'Found' if api_key else 'NOT FOUND'}")
+        LOG.info(f"📋 OpenAI library available: {OPENAI_AVAILABLE}")
+        
         if api_key and OPENAI_AVAILABLE:
             try:
                 self.client = OpenAI()
                 self.enabled = True
-                LOG.info("✓ GPT Vision ENABLED")
+                LOG.info("✅ GPT Vision ENABLED - photos will be taken")
+                LOG.info(f"📸 Photo interval: {cfg['gpt_photo_interval']} seconds")
             except Exception as e:
-                LOG.error(f"✗ Failed to initialize OpenAI client: {e}")
+                LOG.error(f"❌ Failed to initialize OpenAI client: {e}")
+                self.enabled = False
+        else:
+            LOG.error("❌ GPT Vision DISABLED - missing API key or library")
+            LOG.error("   Add OPENAI_API_KEY=your_key_here to .env file")
         
         self.last_photo_time = 0
         self.photo_count = 0
         
     def should_take_photo(self) -> bool:
         if not self.enabled:
+            LOG.warning("🔍 GPT Vision disabled - not taking photos")
             return False
         
         current_time = time.time()
         elapsed = current_time - self.last_photo_time
-        return elapsed >= self.cfg["gpt_photo_interval"] or self.photo_count == 0
+        should_take = elapsed >= self.cfg["gpt_photo_interval"] or self.photo_count == 0
+        
+        # Enhanced debugging
+        if self.photo_count == 0:
+            LOG.info("📸 First photo ready - will take immediately")
+            return True
+        
+        # Log every 3 seconds to show timing progress
+        if int(elapsed) % 3 == 0 and elapsed < self.cfg["gpt_photo_interval"]:
+            remaining = self.cfg["gpt_photo_interval"] - elapsed
+            LOG.info(f"⏰ Next photo in {remaining:.0f} seconds... (elapsed: {elapsed:.1f}s)")
+        
+        if should_take:
+            LOG.info(f"📸 Time to take photo #{self.photo_count + 1}!")
+        
+        return should_take
     
     def capture_and_describe(self, frame: np.ndarray, current_action: str = "UNKNOWN") -> Optional[str]:
         if not self.enabled:
@@ -369,12 +395,26 @@ class GPTVision:
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(rgb_frame)
             
-            if self.cfg.get("save_gpt_images", True):
-                os.makedirs("external_camera_images", exist_ok=True)
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"external_camera_images/photo_{self.photo_count:03d}_{timestamp}.jpg"
+            # Always save images for debugging (create gpt_images folder like other scripts)
+            os.makedirs("gpt_images", exist_ok=True)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            microseconds = int((current_time * 1000000) % 1000000)
+            filename = f"gpt_images/external_camera_photo_{self.photo_count:03d}_{timestamp}_{microseconds:06d}.jpg"
+            
+            try:
                 image.save(filename)
-                LOG.info(f"💾 Saved: {filename}")
+                LOG.info(f"💾 Image saved successfully: {filename}")
+                LOG.info(f"📏 Image size: {image.size[0]}x{image.size[1]} pixels")
+                
+                # Verify file was actually created
+                if os.path.exists(filename):
+                    file_size = os.path.getsize(filename)
+                    LOG.info(f"✅ File verified: {file_size} bytes")
+                else:
+                    LOG.error(f"❌ File not found after saving: {filename}")
+                    
+            except Exception as e:
+                LOG.error(f"❌ Failed to save image: {e}")
             
             # Send to GPT
             buffer = io.BytesIO()
@@ -538,31 +578,50 @@ class BrunoExternalCameraSurveillance:
                     self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
 
                 # ============ EXTERNAL CAMERA GPT VISION ============
-                if frame is not None and self.gpt_vision.should_take_photo():
-                    LOG.info("🛑 STOPPING for external camera analysis...")
-                    self.stop_all()
-                    time.sleep(0.3)
+                if frame is not None:
+                    # Debug: Always check if we should take photo
+                    should_take = self.gpt_vision.should_take_photo()
                     
-                    # Capture multiple fresh frames from external camera
-                    fresh_frame = None
-                    for i in range(3):
-                        self.cap.read()  # Flush buffer
-                        time.sleep(0.05)
-                    
-                    for i in range(3):
-                        ok, fresh_frame = self.cap.read()
-                        if ok and fresh_frame is not None:
-                            break
-                        time.sleep(0.1)
-                    
-                    if fresh_frame is not None:
-                        description = self.gpt_vision.capture_and_describe(fresh_frame, current_action)
-                    else:
-                        LOG.error("❌ Failed to get fresh frame from external camera")
-                    
-                    time.sleep(0.5)
-                    LOG.info(f"▶️  RESUMING surveillance...")
-                    continue
+                    if should_take:
+                        LOG.info("🛑 STOPPING SURVEILLANCE for external camera photo session...")
+                        self.stop_all()
+                        time.sleep(0.3)
+                        
+                        # Flush camera buffer and get fresh frame
+                        LOG.info("🔄 Flushing camera buffer...")
+                        for i in range(3):
+                            self.cap.read()  # Discard old frames
+                            time.sleep(0.05)
+                        
+                        # Capture fresh frame
+                        fresh_frame = None
+                        for attempt in range(3):
+                            ok, fresh_frame = self.cap.read()
+                            if ok and fresh_frame is not None:
+                                LOG.info(f"✅ Got fresh frame on attempt {attempt + 1}")
+                                break
+                            time.sleep(0.1)
+                        
+                        if fresh_frame is not None:
+                            LOG.info(f"📸 Processing external camera photo #{self.gpt_vision.photo_count + 1}...")
+                            description = self.gpt_vision.capture_and_describe(fresh_frame, current_action)
+                            
+                            if description:
+                                LOG.info("✅ Photo processing completed successfully")
+                            else:
+                                LOG.error("❌ Photo processing failed")
+                        else:
+                            LOG.error("❌ Failed to capture fresh frame from external camera")
+                            # Still update timer to prevent getting stuck
+                            self.gpt_vision.last_photo_time = time.time()
+                        
+                        time.sleep(0.5)
+                        LOG.info(f"▶️  RESUMING SURVEILLANCE for next {self.cfg['gpt_photo_interval']} seconds...")
+                        continue
+                else:
+                    # Debug: Log when no frame available
+                    if self.frame_idx % 100 == 0:  # Every ~3 seconds
+                        LOG.warning("⚠️  No camera frame available for GPT Vision")
 
                 time.sleep(0.03)
 
