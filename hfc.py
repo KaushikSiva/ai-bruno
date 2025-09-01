@@ -333,7 +333,7 @@ class BrunoIntelligentExplorer:
                 d_cm = self.ultra.get_distance_cm()
                 
                 # ============ OBSTACLE AVOIDANCE & MOVEMENT ============
-                if d_cm and d_cm <= self.cfg["ultra_danger_cm"]:
+                if d_cm is not None and d_cm <= self.cfg["ultra_danger_cm"]:
                     # EMERGENCY STOP
                     self.ultra.set_rgb(255, 0, 0)  # red
                     self.stop_all()
@@ -342,7 +342,7 @@ class BrunoIntelligentExplorer:
                     time.sleep(0.05)
                     continue
                     
-                elif d_cm and d_cm <= self.cfg["ultra_caution_cm"]:
+                elif d_cm is not None and d_cm <= self.cfg["ultra_caution_cm"]:
                     # AVOIDANCE MANEUVER
                     self.ultra.set_rgb(255, 180, 0)  # amber
                     
@@ -362,11 +362,14 @@ class BrunoIntelligentExplorer:
                     time.sleep(0.05)
                     continue
                 else:
-                    # SAFE TO MOVE FORWARD
+                    # SAFE TO MOVE FORWARD (or sensor reading failed)
                     self.ultra.set_rgb(0, 255, 0)  # green
                     self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
-                    current_action = "FORWARD (safe)"
-                    LOG.info(f"[ULTRA] {d_cm:.1f}cm - {current_action}")
+                    current_action = "FORWARD"
+                    if d_cm is not None:
+                        LOG.info(f"[ULTRA] {d_cm:.1f}cm - {current_action} (safe)")
+                    else:
+                        LOG.info(f"[ULTRA] No reading - {current_action} (assumed safe)")
 
                 # ============ GPT VISION PHOTOS ============
                 if frame is not None and self.vision_client.should_take_photo():
