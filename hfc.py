@@ -1,23 +1,43 @@
 #!/usr/bin/env python3
 # coding: utf-8
 """
-Bruno Intelligent Exploration (with OpenAI, Grok, or Hugging Face BLIP Vision)
+Bruno Intelligent Exploration (with OpenAI, Grok, or Hugging Face Vision)
 - Select via VISION_PROVIDER in .env (values: "openai", "grok", "free")
+
+ENV vars you likely want:
+  VISION_PROVIDER=free
+  HF_TOKEN=hf_************************
+  # Optional:
+  HF_MODEL=Salesforce/blip-image-captioning-large
+  HF_INFERENCE_URL=   # e.g. https://xxxxxx.us-east-1.aws.endpoints.huggingface.cloud (paid endpoints)
+  HF_TIMEOUT=45
+
+Camera/robot:
+  BRUNO_CAMERA_URL=http://127.0.0.1:8080?action=stream
+  BRUNO_SPEED=40
+  BRUNO_TURN_SPEED=40
+  BRUNO_TURN_TIME=0.5
+  BRUNO_BACKUP_TIME=0.0
+  ULTRA_CAUTION_CM=50
+  ULTRA_DANGER_CM=25
 """
 
 import os, sys, time, json, signal, logging, threading, urllib.request
 import base64, io, requests
 from urllib.parse import urlparse
 from typing import Optional, List, Dict
+from datetime import datetime
 
+# -------------------------
 # Load environment variables
+# -------------------------
 if os.path.exists('.env'):
     with open('.env', 'r') as f:
         for line in f:
             if line.strip() and not line.startswith('#'):
                 key, value = line.strip().split('=', 1)
                 os.environ[key] = value
-    print(f"✓ Loaded .env file")
+    print("✓ Loaded .env file")
 
 # --- Hiwonder SDK path ---
 sys.path.append('/home/pi/MasterPi')
@@ -34,7 +54,7 @@ except Exception:
     pd = None
     PANDAS_OK = False
 
-# OpenAI
+# OpenAI (optional)
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
@@ -54,7 +74,7 @@ from kinematics.arm_move_ik import ArmIK
 CONFIG = {
     "camera_url": os.environ.get("BRUNO_CAMERA_URL", "http://127.0.0.1:8080?action=stream"),
     "autostart_local_stream": True,
-    "stream_port": 8080,
+    "stream_port": int(os.environ.get("BRUNO_STREAM_PORT", "8080")),
     "ultra_caution_cm": float(os.environ.get("ULTRA_CAUTION_CM", "50")),
     "ultra_danger_cm": float(os.environ.get("ULTRA_DANGER_CM", "25")),
     "forward_speed": int(os.environ.get("BRUNO_SPEED", "40")),
@@ -66,11 +86,14 @@ CONFIG = {
     "edge_min_area": 800,
     "danger_px": 70,
     "avoid_px": 110,
-    "gpt_photo_interval": 10,
-    "gpt_vision_prompt": "Describe what you see in this image. Focus on objects, bottles, bins, obstacles, walls, and environment.",
-    "save_gpt_images": True,
-    "save_debug": True,
-    "debug_interval": 20,
+    "gpt_photo_interval": float(os.environ.get("BRUNO_PHOTO_INTERVAL", "10")),
+    "gpt_vision_prompt": os.environ.get(
+        "BRUNO_VISION_PROMPT",
+        "Describe what you see in this image. Focus on objects, bottles, bins, obstacles, walls, and environment."
+    ),
+    "save_gpt_images": os.environ.get("SAVE_GPT_IMAGES", "1") not in ("0", "false", "False"),
+    "save_debug": os.environ.get("SAVE_DEBUG", "1") not in ("0", "false", "False"),
+    "debug_interval": int(os.environ.get("BRUNO_DEBUG_INTERVAL", "20")),
 }
 
 # =========================
@@ -82,6 +105,12 @@ LOG = logging.getLogger("bruno.vision")
 # =========================
 # Helpers
 # =========================
+def ensure_dir(path: str):
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        pass
+
 def _is_stream_up(url: str, timeout: float = 2.0) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -131,20 +160,31 @@ class UltrasonicRGB:
             try:
                 d_cm = self.sonar.getDistance() / 10.0
                 if 2.0 <= d_cm <= 400.0: vals.append(float(d_cm))
-            except Exception: pass
+            except Exception:
+                pass
             time.sleep(self.sample_delay)
-        if not vals: return None
-        if len(vals) >= 4: vals.remove(max(vals)); vals.remove(min(vals))
+
+        if not vals:
+            return None
+
+        if len(vals) >= 4:
+            vals.remove(max(vals))
+            vals.remove(min(vals))
+
         if PANDAS_OK and len(vals) >= 3:
             s = pd.Series(vals); m, std = float(s.mean()), float(s.std())
             s = s[np.abs(s - m) <= std] if std > 0 else s
-            if len(s) > 0: return float(s.mean())
+            if len(s) > 0:
+                return float(s.mean())
+
         return float(np.mean(vals))
 
     def set_rgb(self, r, g, b):
         for i in [0, 1]:
-            try: self.sonar.setPixelColor(i, (r, g, b))
-            except Exception: pass
+            try:
+                self.sonar.setPixelColor(i, (r, g, b))
+            except Exception:
+                pass
 
 # =========================
 # Vision Backends
@@ -155,7 +195,7 @@ class VisionClient:
         self.provider = os.environ.get("VISION_PROVIDER", "grok").lower()
         self.last_photo_time, self.photo_count = time.time(), 0
         self.enabled = False
-        self.descriptions = []
+        self.descriptions: List[str] = []
 
         LOG.info(f"🔍 Initializing Vision provider = {self.provider}")
         if self.provider == "openai":
@@ -164,34 +204,105 @@ class VisionClient:
                 self.client = OpenAI()
                 self.enabled = True
                 LOG.info("✓ OpenAI Vision enabled")
+            else:
+                LOG.warning("OpenAI not available or OPENAI_API_KEY missing")
         elif self.provider == "grok":
             self.api_key = os.environ.get("XAI_API_KEY")
             if self.api_key:
                 self.enabled = True
                 LOG.info("✓ Grok Vision enabled")
+            else:
+                LOG.warning("XAI_API_KEY missing; Grok disabled")
         elif self.provider == "free":
             self.api_key = os.environ.get("HF_TOKEN")
+            self.hf_endpoint = os.environ.get("HF_INFERENCE_URL", "").strip()
+            self.hf_model = os.environ.get("HF_MODEL", "Salesforce/blip-image-captioning-large")
+            self.hf_timeout = float(os.environ.get("HF_TIMEOUT", "45"))
+            self.hf_fallback_models = [
+                "Salesforce/blip-image-captioning-base",
+                "nlpconnect/vit-gpt2-image-captioning"
+            ]
             if self.api_key:
                 self.enabled = True
-                LOG.info(f"✓ Hugging Face BLIP Vision enabled (token length: {len(self.api_key)})")
+                LOG.info(f"✓ Hugging Face Vision enabled (model={self.hf_model})")
             else:
-                LOG.error("✗ HF_TOKEN not found in environment variables")
-                LOG.error("Please set HF_TOKEN in your .env file or export HF_TOKEN=your_token")
+                LOG.warning("HF_TOKEN not set; 'free' provider disabled")
         else:
             LOG.warning(f"Unknown provider: {self.provider}")
+
+        # Create a folder to optionally save snapshots + captions
+        if self.enabled and self.cfg.get("save_gpt_images", False):
+            ensure_dir("gpt_shots")
 
     def should_take_photo(self) -> bool:
         return self.enabled and (time.time() - self.last_photo_time) >= self.cfg["gpt_photo_interval"]
 
-    def capture_and_describe(self, frame, current_action="UNKNOWN"):
-        if not self.enabled: return None
+    # ---- HF helper ----
+    def _hf_caption(self, img_bytes: bytes) -> Optional[str]:
+        """
+        Try HF model(s) in order. Use binary upload and wait for cold starts.
+        """
+        def _url_for(model_id: str) -> str:
+            if self.hf_endpoint:
+                # If using a dedicated inference endpoint, post directly to it.
+                return self.hf_endpoint.rstrip("/")
+            return f"https://api-inference.huggingface.co/models/{model_id}"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "x-wait-for-model": "true",
+            "Accept": "application/json",
+            # "Content-Type": "image/jpeg",  # optional; HF will infer for binary
+        }
+
+        candidates = [self.hf_model] + [m for m in self.hf_fallback_models if m != self.hf_model]
+        for model_id in candidates:
+            url = _url_for(model_id)
+            try:
+                r = requests.post(url, headers=headers, data=img_bytes, timeout=self.hf_timeout)
+                if r.status_code in (404, 405):
+                    LOG.warning(f"HF: route not found for {model_id} at {url} ({r.status_code}); trying fallback")
+                    continue
+                if r.status_code in (429, 500, 503):
+                    time.sleep(1.5)
+                    r = requests.post(url, headers=headers, data=img_bytes, timeout=self.hf_timeout)
+
+                r.raise_for_status()
+                result = r.json()
+                text = None
+                if isinstance(result, list) and result:
+                    first = result[0]
+                    if isinstance(first, dict):
+                        text = first.get("generated_text") or first.get("caption")
+                    elif isinstance(first, str):
+                        text = first
+                elif isinstance(result, dict):
+                    text = result.get("generated_text") or result.get("caption") or result.get("text")
+
+                if text and text.strip():
+                    return text.strip()
+
+                LOG.warning(f"HF: unexpected response shape for {model_id}: {result}")
+            except Exception as e:
+                LOG.warning(f"HF call failed for {model_id} at {url}: {e}")
+        return None
+
+    def capture_and_describe(self, frame, current_action="UNKNOWN") -> Optional[str]:
+        if not self.enabled:
+            return None
+
+        # Encode to JPEG bytes
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(rgb); buf = io.BytesIO()
+        img = Image.fromarray(rgb)
+        buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         img_bytes = buf.getvalue()
+
+        # Data-URL (for OpenAI/Grok)
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
         img_url = f"data:image/jpeg;base64,{img_b64}"
 
+        desc = None
         try:
             if self.provider == "openai":
                 resp = self.client.chat.completions.create(
@@ -216,101 +327,41 @@ class VisionClient:
                 }
                 resp = requests.post("https://api.x.ai/v1/chat/completions",
                                      headers=headers, json=payload, timeout=30)
-                resp.raise_for_status(); data = resp.json()
+                resp.raise_for_status()
+                data = resp.json()
                 desc = data["choices"][0]["message"]["content"]
 
             elif self.provider == "free":
-                headers = {
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                }
-                
-                # Try working models in order of preference  
-                models = [
-                    "Salesforce/blip-image-captioning-base",
-                    "nlpconnect/vit-gpt2-image-captioning",
-                    "microsoft/DialoGPT-medium"
-                ]
-                
-                desc = None
-                for model in models:
-                    api_url = f"https://api-inference.huggingface.co/models/{model}"
-                    LOG.info(f"Trying model: {model}")
-                    
-                    # Convert image bytes to base64 for JSON payload
-                    b64_image = base64.b64encode(img_bytes).decode('utf-8')
-                    
-                    # Try different payload formats for this model
-                    payload_formats = [
-                        # Format 1: Direct image data
-                        {"inputs": b64_image},
-                        # Format 2: Parameters format
-                        {"inputs": b64_image, "parameters": {"max_length": 50}}
-                    ]
-                    
-                    model_success = False
-                    for i, payload in enumerate(payload_formats):
-                        try:
-                            LOG.info(f"Trying format {i+1} for {model}...")
-                            resp = requests.post(api_url, headers=headers, json=payload, timeout=30)
-                            resp.raise_for_status()
-                            result = resp.json()
-                            
-                            # Handle different response formats
-                            if isinstance(result, list) and len(result) > 0:
-                                if isinstance(result[0], dict) and 'generated_text' in result[0]:
-                                    desc = result[0]['generated_text']
-                                elif isinstance(result[0], str):
-                                    desc = result[0]
-                            elif isinstance(result, dict):
-                                desc = result.get('generated_text', '') or result.get('text', '') or str(result)
-                            
-                            if desc and desc.strip():
-                                LOG.info(f"✓ SUCCESS: {model} with format {i+1}")
-                                model_success = True
-                                break
-                                
-                        except Exception as e:
-                            LOG.warning(f"Format {i+1} failed for {model}: {e}")
-                            if hasattr(e, 'response') and e.response is not None:
-                                LOG.warning(f"Status: {e.response.status_code}, Body: {e.response.text[:200]}")
-                            
-                            if i == 0:  # For first failure, also try binary data
-                                try:
-                                    LOG.info(f"Trying binary format for {model}...")
-                                    headers_binary = {"Authorization": f"Bearer {self.api_key}"}
-                                    resp = requests.post(api_url, headers=headers_binary, data=img_bytes, timeout=30)
-                                    resp.raise_for_status()
-                                    result = resp.json()
-                                    
-                                    if isinstance(result, list) and len(result) > 0:
-                                        desc = result[0].get('generated_text', '') if isinstance(result[0], dict) else str(result[0])
-                                    elif isinstance(result, dict):
-                                        desc = result.get('generated_text', '') or str(result)
-                                    
-                                    if desc and desc.strip():
-                                        LOG.info(f"✓ SUCCESS: {model} with binary format")
-                                        model_success = True
-                                        break
-                                        
-                                except Exception as e2:
-                                    LOG.warning(f"Binary format failed for {model}: {e2}")
-                            continue
-                    
-                    if model_success:
-                        break  # Exit model loop if we got a result
-                    else:
-                        LOG.error(f"❌ Model {model} failed with all formats")
-                
-                if not desc or not desc.strip():
-                    raise Exception("Hugging Face BLIP API failed with all formats")
+                desc = self._hf_caption(img_bytes)
+                if not desc:
+                    raise Exception("Hugging Face captioning failed across all candidates")
 
             else:
                 desc = None
 
-            self.photo_count += 1; self.last_photo_time = time.time()
+            # Record and optionally save
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self.photo_count += 1
+            self.last_photo_time = time.time()
+            if desc:
+                self.descriptions.append({"t": ts, "provider": self.provider, "text": desc})
+
+            # Optional: persist the frame + caption
+            if self.cfg.get("save_gpt_images", False):
+                ensure_dir("gpt_shots")
+                jpg_path = os.path.join("gpt_shots", f"{ts}_{self.provider}.jpg")
+                txt_path = os.path.join("gpt_shots", f"{ts}_{self.provider}.txt")
+                try:
+                    with open(jpg_path, "wb") as f:
+                        f.write(img_bytes)
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write(desc or "")
+                except Exception as e:
+                    LOG.warning(f"Could not save GPT shot: {e}")
+
             LOG.info(f"🔍 {self.provider.upper()} vision: {desc}")
             return desc
+
         except Exception as e:
             LOG.error(f"Vision error: {e}")
             self.last_photo_time = time.time()
@@ -321,10 +372,16 @@ class VisionClient:
 # =========================
 class BrunoIntelligentExplorer:
     def __init__(self, cfg: Dict):
-        self.cfg, self.car, self.board = cfg, mecanum.MecanumChassis(), Board()
-        self.AK = ArmIK(); self.AK.board = self.board
-        self.ultra, self.vision_client = UltrasonicRGB(), VisionClient(cfg)
-        self.cap, self.running, self.frame_idx = None, False, 0
+        self.cfg = cfg
+        self.car = mecanum.MecanumChassis()
+        self.board = Board()
+        self.AK = ArmIK()
+        self.AK.board = self.board
+        self.ultra = UltrasonicRGB()
+        self.vision_client = VisionClient(cfg)
+        self.cap: Optional[cv2.VideoCapture] = None
+        self.running = False
+        self.frame_idx = 0
 
     def _open_camera(self) -> bool:
         if self.cfg["autostart_local_stream"] and _looks_like_local(self.cfg["camera_url"], self.cfg["stream_port"]):
@@ -333,26 +390,34 @@ class BrunoIntelligentExplorer:
                 _start_stream_background(port=self.cfg["stream_port"])
                 _wait_until(lambda: _is_stream_up(self.cfg["camera_url"]), 8.0, 0.5)
         self.cap = cv2.VideoCapture(self.cfg["camera_url"])
-        return self.cap.isOpened()
+        if not self.cap.isOpened():
+            LOG.warning(f"Camera not opened: {self.cfg['camera_url']}")
+            return False
+        return True
 
     def stop_all(self):
-        try: self.car.set_velocity(0,0,0)
-        except Exception: pass
+        try:
+            self.car.set_velocity(0, 0, 0)
+        except Exception:
+            pass
 
     def run(self):
         LOG.info("🤖 Bruno Explorer started")
-        if not self._open_camera(): LOG.warning("No camera available")
+        if not self._open_camera():
+            LOG.warning("No camera available")
         self.running = True
         try:
             while self.running:
-                self.frame_idx += 1; frame = None
+                self.frame_idx += 1
+                frame = None
                 if self.cap and self.cap.isOpened():
-                    ok, frame = self.cap.read(); frame = frame if ok else None
+                    ok, frame = self.cap.read()
+                    frame = frame if ok else None
 
                 d_cm = self.ultra.get_distance_cm()
-                
-                # ============ OBSTACLE AVOIDANCE & MOVEMENT ============
-                if d_cm is not None and d_cm <= self.cfg["ultra_danger_cm"]:
+
+                # ===== OBSTACLE AVOIDANCE & MOVEMENT =====
+                if d_cm and d_cm <= self.cfg["ultra_danger_cm"]:
                     # EMERGENCY STOP
                     self.ultra.set_rgb(255, 0, 0)  # red
                     self.stop_all()
@@ -360,17 +425,17 @@ class BrunoIntelligentExplorer:
                     LOG.warning(current_action)
                     time.sleep(0.05)
                     continue
-                    
-                elif d_cm is not None and d_cm <= self.cfg["ultra_caution_cm"]:
+
+                elif d_cm and d_cm <= self.cfg["ultra_caution_cm"]:
                     # AVOIDANCE MANEUVER
                     self.ultra.set_rgb(255, 180, 0)  # amber
-                    
-                    # Optional backup
+
+                    # Optional backup (simple strafe back-left)
                     if self.cfg["backup_time"] > 0:
                         self.car.set_velocity(self.cfg["turn_speed"], 90, 0)
                         time.sleep(self.cfg["backup_time"])
                         self.stop_all()
-                    
+
                     # Alternate turn direction
                     left = ((self.frame_idx // 60) % 2 == 0)
                     self.car.set_velocity(0, 90, -0.5 if left else 0.5)
@@ -380,39 +445,36 @@ class BrunoIntelligentExplorer:
                     LOG.info(current_action)
                     time.sleep(0.05)
                     continue
+
                 else:
-                    # SAFE TO MOVE FORWARD (or sensor reading failed)
+                    # SAFE TO MOVE FORWARD
                     self.ultra.set_rgb(0, 255, 0)  # green
                     self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
-                    current_action = "FORWARD"
-                    if d_cm is not None:
-                        LOG.info(f"[ULTRA] {d_cm:.1f}cm - {current_action} (safe)")
-                    else:
-                        LOG.info(f"[ULTRA] No reading - {current_action} (assumed safe)")
+                    current_action = "FORWARD (safe)"
+                    LOG.info(f"[ULTRA] {d_cm:.1f}cm - {current_action}")
 
-                # ============ GPT VISION PHOTOS ============
+                # ===== VISION SNAPSHOTS =====
                 if frame is not None and self.vision_client.should_take_photo():
-                    # Stop Bruno before taking picture
                     self.stop_all()
                     time.sleep(0.2)
                     LOG.info("📸 Taking GPT photo...")
-                    
-                    # Take photo and get GPT response
                     self.vision_client.capture_and_describe(frame, current_action)
-                    
-                    # Resume movement after GPT response
                     LOG.info("▶️ Resuming Bruno movement after photo...")
-                    continue  # Skip to next iteration to resume normal movement
-                
+                    continue
+
                 time.sleep(0.03)
         except KeyboardInterrupt:
             pass
-        finally: self.shutdown()
+        finally:
+            self.shutdown()
 
     def shutdown(self):
-        LOG.info("Shutting down..."); self.running = False; self.stop_all()
-        if self.cap: self.cap.release()
-        self.ultra.set_rgb(0,0,0)
+        LOG.info("Shutting down...")
+        self.running = False
+        self.stop_all()
+        if self.cap:
+            self.cap.release()
+        self.ultra.set_rgb(0, 0, 0)
 
 # =========================
 # Entrypoint
@@ -420,7 +482,8 @@ class BrunoIntelligentExplorer:
 RUNNER = None
 def _sig_handler(signum, frame):
     global RUNNER
-    if RUNNER: RUNNER.shutdown()
+    if RUNNER:
+        RUNNER.shutdown()
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, _sig_handler)
