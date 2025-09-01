@@ -225,78 +225,82 @@ class VisionClient:
                     "Content-Type": "application/json"
                 }
                 
-                # Use the specific model you requested
-                api_url = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
-                
-                # Convert image bytes to base64 for JSON payload
-                b64_image = base64.b64encode(img_bytes).decode('utf-8')
-                
-                # Try different payload formats
-                payload_formats = [
-                    # Format 1: Direct image data
-                    {"inputs": b64_image},
-                    # Format 2: Image URL format (if we had URL)
-                    # {"inputs": {"image": b64_image}},
-                    # Format 3: Parameters format
-                    {"inputs": b64_image, "parameters": {"max_length": 50}}
+                # Try working models in order of preference  
+                models = [
+                    "Salesforce/blip-image-captioning-base",
+                    "nlpconnect/vit-gpt2-image-captioning",
+                    "microsoft/DialoGPT-medium"
                 ]
                 
                 desc = None
-                for i, payload in enumerate(payload_formats):
-                    try:
-                        LOG.info(f"Trying HF API format {i+1}...")
-                        resp = requests.post(api_url, headers=headers, json=payload, timeout=30)
-                        resp.raise_for_status()
-                        result = resp.json()
-                        
-                        # Handle different response formats
-                        if isinstance(result, list) and len(result) > 0:
-                            if isinstance(result[0], dict) and 'generated_text' in result[0]:
-                                desc = result[0]['generated_text']
-                            elif isinstance(result[0], str):
-                                desc = result[0]
-                        elif isinstance(result, dict):
-                            desc = result.get('generated_text', '') or result.get('text', '') or str(result)
-                        
-                        if desc and desc.strip():
-                            LOG.info(f"✓ HF API success with format {i+1}")
-                            break
+                for model in models:
+                    api_url = f"https://api-inference.huggingface.co/models/{model}"
+                    LOG.info(f"Trying model: {model}")
+                    
+                    # Convert image bytes to base64 for JSON payload
+                    b64_image = base64.b64encode(img_bytes).decode('utf-8')
+                    
+                    # Try different payload formats for this model
+                    payload_formats = [
+                        # Format 1: Direct image data
+                        {"inputs": b64_image},
+                        # Format 2: Parameters format
+                        {"inputs": b64_image, "parameters": {"max_length": 50}}
+                    ]
+                    
+                    model_success = False
+                    for i, payload in enumerate(payload_formats):
+                        try:
+                            LOG.info(f"Trying format {i+1} for {model}...")
+                            resp = requests.post(api_url, headers=headers, json=payload, timeout=30)
+                            resp.raise_for_status()
+                            result = resp.json()
                             
-                    except Exception as e:
-                        LOG.error(f"HF API format {i+1} failed: {e}")
-                        # Log response details if available
-                        if hasattr(e, 'response') and e.response is not None:
-                            LOG.error(f"Response status: {e.response.status_code}")
-                            LOG.error(f"Response body: {e.response.text[:500]}")
-                        
-                        if i == 0:  # For first failure, also try binary data
-                            try:
-                                LOG.info("Trying binary data format...")
-                                headers_binary = {"Authorization": f"Bearer {self.api_key}"}
-                                resp = requests.post(api_url, headers=headers_binary, data=img_bytes, timeout=30)
+                            # Handle different response formats
+                            if isinstance(result, list) and len(result) > 0:
+                                if isinstance(result[0], dict) and 'generated_text' in result[0]:
+                                    desc = result[0]['generated_text']
+                                elif isinstance(result[0], str):
+                                    desc = result[0]
+                            elif isinstance(result, dict):
+                                desc = result.get('generated_text', '') or result.get('text', '') or str(result)
+                            
+                            if desc and desc.strip():
+                                LOG.info(f"✓ SUCCESS: {model} with format {i+1}")
+                                model_success = True
+                                break
                                 
-                                LOG.info(f"Binary request status: {resp.status_code}")
-                                if resp.status_code != 200:
-                                    LOG.error(f"Binary response: {resp.text[:500]}")
-                                
-                                resp.raise_for_status()
-                                result = resp.json()
-                                
-                                if isinstance(result, list) and len(result) > 0:
-                                    desc = result[0].get('generated_text', '') if isinstance(result[0], dict) else str(result[0])
-                                elif isinstance(result, dict):
-                                    desc = result.get('generated_text', '') or str(result)
-                                
-                                if desc and desc.strip():
-                                    LOG.info("✓ HF API success with binary format")
-                                    break
+                        except Exception as e:
+                            LOG.warning(f"Format {i+1} failed for {model}: {e}")
+                            if hasattr(e, 'response') and e.response is not None:
+                                LOG.warning(f"Status: {e.response.status_code}, Body: {e.response.text[:200]}")
+                            
+                            if i == 0:  # For first failure, also try binary data
+                                try:
+                                    LOG.info(f"Trying binary format for {model}...")
+                                    headers_binary = {"Authorization": f"Bearer {self.api_key}"}
+                                    resp = requests.post(api_url, headers=headers_binary, data=img_bytes, timeout=30)
+                                    resp.raise_for_status()
+                                    result = resp.json()
                                     
-                            except Exception as e2:
-                                LOG.error(f"Binary format also failed: {e2}")
-                                if hasattr(e2, 'response') and e2.response is not None:
-                                    LOG.error(f"Binary response status: {e2.response.status_code}")
-                                    LOG.error(f"Binary response body: {e2.response.text[:500]}")
-                        continue
+                                    if isinstance(result, list) and len(result) > 0:
+                                        desc = result[0].get('generated_text', '') if isinstance(result[0], dict) else str(result[0])
+                                    elif isinstance(result, dict):
+                                        desc = result.get('generated_text', '') or str(result)
+                                    
+                                    if desc and desc.strip():
+                                        LOG.info(f"✓ SUCCESS: {model} with binary format")
+                                        model_success = True
+                                        break
+                                        
+                                except Exception as e2:
+                                    LOG.warning(f"Binary format failed for {model}: {e2}")
+                            continue
+                    
+                    if model_success:
+                        break  # Exit model loop if we got a result
+                    else:
+                        LOG.error(f"❌ Model {model} failed with all formats")
                 
                 if not desc or not desc.strip():
                     raise Exception("Hugging Face BLIP API failed with all formats")
