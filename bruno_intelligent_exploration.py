@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Bruno Obstacle Avoidance System - Headless Version
-Runs obstacle avoidance without GUI display for headless systems
+Bruno Intelligent Exploration System
+Combines headless obstacle avoidance with GPT Vision descriptions
+Takes photos every 20 seconds and gets AI descriptions while safely navigating
 """
 
 import cv2
@@ -11,7 +12,13 @@ import numpy as np
 import logging
 import json
 import os
+import base64
+import io
 from typing import Dict, List, Optional, Tuple
+from threading import Thread, Event
+import threading
+
+from PIL import Image
 
 # Optional pandas import for data smoothing
 try:
@@ -20,22 +27,47 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = False
 
+# OpenAI for vision descriptions
+try:
+    from openai import OpenAI, APIError
+    OPENAI_AVAILABLE = True
+except ImportError:
+    print("Warning: OpenAI library not available. Install with: pip install openai")
+    OPENAI_AVAILABLE = False
+
 # Bruno's existing components
 from src.robot_control.movement_controller import MovementController
 from src.robot_control.roomba_navigator import RoombaNavigator, NavigationState
 
-class BrunoObstacleAvoidanceHeadless:
+class BrunoIntelligentExploration:
+    """
+    Intelligent exploration combining obstacle avoidance with GPT Vision descriptions
+    """
+    
     def __init__(self, config: Dict = None):
         self.config = config or self._default_config()
         self.setup_logging()
+        
+        # Initialize OpenAI client if available
+        if OPENAI_AVAILABLE and os.environ.get("OPENAI_API_KEY"):
+            self.openai_client = OpenAI()
+            self.gpt_vision_enabled = True
+            self.logger.info("✓ GPT Vision enabled")
+        else:
+            self.openai_client = None
+            self.gpt_vision_enabled = False
+            if not os.environ.get("OPENAI_API_KEY"):
+                self.logger.warning("⚠️  OPENAI_API_KEY not set - GPT Vision disabled")
+            else:
+                self.logger.warning("⚠️  OpenAI library not available - GPT Vision disabled")
         
         # Initialize Bruno's movement systems
         self.movement = MovementController(self.config.get('movement', {}))
         self.navigator = RoombaNavigator(self.config.get('navigation', {}))
         
         # Obstacle detection parameters
-        self.obstacle_threshold = self.config.get('obstacle_threshold', 80)  # pixels
-        self.danger_threshold = self.config.get('danger_threshold', 120)    # pixels
+        self.obstacle_threshold = self.config.get('obstacle_threshold', 100)
+        self.danger_threshold = self.config.get('danger_threshold', 50)
         self.frame_width = 640
         self.frame_height = 480
         
@@ -50,8 +82,13 @@ class BrunoObstacleAvoidanceHeadless:
         self.frame_count = 0
         self.start_time = time.time()
         
+        # GPT Vision timing
+        self.last_gpt_photo_time = 0
+        self.gpt_photo_interval = self.config.get('gpt_photo_interval', 20)  # 20 seconds
+        self.gpt_descriptions = []
+        self.photo_count = 0
+        
         # Camera setup
-        self.camera_url = self.config.get('camera_url', 'http://127.0.0.1:8080?action=stream')
         self.cap = None
         
         # Statistics
@@ -59,37 +96,43 @@ class BrunoObstacleAvoidanceHeadless:
             'frames_processed': 0,
             'obstacles_detected': 0,
             'emergency_stops': 0,
-            'avoidance_maneuvers': 0
+            'avoidance_maneuvers': 0,
+            'gpt_photos_taken': 0,
+            'gpt_descriptions_received': 0,
+            'exploration_time': 0
         }
         
-        self.logger.info("🤖 Bruno Headless Obstacle Avoidance System initialized")
+        self.logger.info("🤖 Bruno Intelligent Exploration System initialized")
     
     def _default_config(self) -> Dict:
-        """Default obstacle avoidance configuration"""
+        """Default intelligent exploration configuration"""
         return {
-            'obstacle_threshold': 80,      # Distance in pixels to start avoiding
-            'danger_threshold': 120,       # Distance to emergency stop
+            'obstacle_threshold': 100,     # Start avoiding at 100px distance
+            'danger_threshold': 50,        # Emergency stop at 50px (very close)
+            'normal_speed': 30,            # Slower normal speed for safety
+            'avoidance_speed': 20,         # Slower avoidance speed
             'camera_url': 'http://127.0.0.1:8080?action=stream',
             'detection_area': {            # Area of frame to check for obstacles
-                'top': 0.3,               # 30% from top
+                'top': 0.4,               # 40% from top (focus on closer area)
                 'bottom': 0.9,            # 90% from top  
-                'left': 0.1,              # 10% from left
-                'right': 0.9              # 90% from left
+                'left': 0.2,              # 20% from left (narrower focus)
+                'right': 0.8              # 80% from left
             },
-            'avoidance_speed': 25,         # Speed when avoiding obstacles
-            'normal_speed': 35,            # Normal forward speed
-            'turn_time': 1.0,              # Time to turn when avoiding
-            'backup_time': 0.8,            # Time to backup when obstacle detected
-            'save_debug_images': False,    # Save debug images to disk
-            'debug_image_interval': 30,    # Save debug image every N frames
-            'status_report_interval': 100, # Print status every N frames
+            'turn_time': 1.2,              # Longer turn time for better avoidance
+            'backup_time': 1.0,            # Longer backup time
+            'gpt_photo_interval': 20,      # Take GPT photo every 20 seconds
+            'gpt_vision_prompt': "Describe what you see in this image. Focus on: objects, furniture, rooms, people, pets, bottles, bins/containers, obstacles, walls, and the general environment. Keep it concise but detailed.",
+            'save_debug_images': True,     # Save debug images for analysis
+            'save_gpt_images': True,       # Save images sent to GPT
+            'debug_image_interval': 30,    # Save every 30 frames (more frequent)
+            'status_report_interval': 100, # Status report every 100 frames
             'movement': {                  # Movement controller config
-                'max_speed': 50,
-                'min_speed': 15
+                'max_speed': 40,
+                'min_speed': 10
             },
             'navigation': {                # Navigation config
-                'forward_speed': 35,
-                'turn_speed': 30
+                'forward_speed': 30,
+                'turn_speed': 25
             }
         }
     
@@ -118,7 +161,7 @@ class BrunoObstacleAvoidanceHeadless:
         try:
             # Load camera config
             camera_config = self.load_camera_config()
-            device_id = camera_config.get('device_id', self.camera_url)
+            device_id = camera_config.get('device_id', self.config['camera_url'])
             fallback_device_id = camera_config.get('fallback_device_id', 0)
             
             # Try primary camera source
@@ -432,6 +475,155 @@ class BrunoObstacleAvoidanceHeadless:
         
         self.logger.info(f"🤖 Action: {action} - {action_plan['message']}")
     
+    def capture_gpt_image(self, frame: np.ndarray) -> Optional[Image.Image]:
+        """Capture and prepare image for GPT Vision"""
+        try:
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Convert to PIL Image
+            image = Image.fromarray(rgb_frame)
+            
+            # Save image if configured
+            if self.config.get('save_gpt_images', True):
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                filename = f"gpt_images/bruno_explore_{timestamp}_{self.photo_count:04d}.jpg"
+                os.makedirs("gpt_images", exist_ok=True)
+                image.save(filename)
+                self.logger.info(f"📸 GPT image saved: {filename}")
+            
+            return image
+        
+        except Exception as e:
+            self.logger.error(f"Error capturing GPT image: {e}")
+            return None
+    
+    def encode_image_for_gpt(self, image: Image.Image) -> str:
+        """Encode PIL image to base64 for GPT Vision"""
+        try:
+            # Convert to JPEG
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=85)
+            jpeg_data = buffer.getvalue()
+            
+            # Encode to base64
+            base64_data = base64.b64encode(jpeg_data).decode('utf-8')
+            return f"data:image/jpeg;base64,{base64_data}"
+        
+        except Exception as e:
+            self.logger.error(f"Error encoding image for GPT: {e}")
+            return None
+    
+    def ask_gpt_vision(self, image: Image.Image) -> Optional[str]:
+        """Ask GPT Vision to describe the image"""
+        if not self.gpt_vision_enabled:
+            return None
+        
+        try:
+            # Encode image
+            image_data = self.encode_image_for_gpt(image)
+            if not image_data:
+                return None
+            
+            self.logger.info("🧠 Asking GPT Vision for description...")
+            
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text", 
+                                "text": self.config.get('gpt_vision_prompt', "Describe what you see in this image.")
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": image_data,
+                                    "detail": "low"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=300,
+                temperature=0.1
+            )
+            
+            description = response.choices[0].message.content
+            self.stats['gpt_descriptions_received'] += 1
+            return description
+            
+        except APIError as e:
+            self.logger.error(f"OpenAI API error: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"GPT Vision error: {e}")
+            return None
+    
+    def process_gpt_vision(self, frame: np.ndarray):
+        """Process GPT Vision if it's time for a new photo"""
+        current_time = time.time()
+        
+        # Check if it's time for a GPT photo
+        if current_time - self.last_gpt_photo_time >= self.gpt_photo_interval:
+            self.logger.info(f"📸 Taking GPT photo ({self.gpt_photo_interval}s interval)")
+            
+            # Capture image for GPT
+            image = self.capture_gpt_image(frame)
+            if image:
+                self.photo_count += 1
+                self.stats['gpt_photos_taken'] += 1
+                
+                # Get GPT description
+                description = self.ask_gpt_vision(image)
+                if description:
+                    # Store description with timestamp
+                    description_entry = {
+                        'timestamp': time.strftime("%H:%M:%S"),
+                        'photo_count': self.photo_count,
+                        'description': description,
+                        'current_action': self.current_action
+                    }
+                    self.gpt_descriptions.append(description_entry)
+                    
+                    # Log the description
+                    self.logger.info("\n" + "=" * 60)
+                    self.logger.info("🔍 GPT VISION DESCRIPTION")
+                    self.logger.info("=" * 60)
+                    self.logger.info(f"Time: {description_entry['timestamp']} | Photo: #{self.photo_count} | Action: {self.current_action}")
+                    self.logger.info(description)
+                    self.logger.info("=" * 60)
+                    
+                else:
+                    self.logger.warning("❌ No description received from GPT Vision")
+            
+            self.last_gpt_photo_time = current_time
+    
+    def print_status_report(self):
+        """Print periodic status report"""
+        if self.frame_count % self.config.get('status_report_interval', 100) != 0:
+            return
+        
+        elapsed_time = time.time() - self.start_time
+        fps = self.frame_count / elapsed_time if elapsed_time > 0 else 0
+        self.stats['exploration_time'] = elapsed_time
+        
+        self.logger.info("=" * 70)
+        self.logger.info("📊 BRUNO INTELLIGENT EXPLORATION STATUS")
+        self.logger.info("=" * 70)
+        self.logger.info(f"Runtime: {elapsed_time:.1f}s | FPS: {fps:.1f} | Action: {self.current_action}")
+        self.logger.info(f"Frames: {self.frame_count} | Obstacles: {self.stats['obstacles_detected']}")
+        self.logger.info(f"Emergency stops: {self.stats['emergency_stops']} | Avoidance: {self.stats['avoidance_maneuvers']}")
+        if self.gpt_vision_enabled:
+            self.logger.info(f"GPT Photos: {self.stats['gpt_photos_taken']} | Descriptions: {self.stats['gpt_descriptions_received']}")
+            next_photo_in = max(0, self.gpt_photo_interval - (time.time() - self.last_gpt_photo_time))
+            self.logger.info(f"Next GPT photo in: {next_photo_in:.1f}s")
+        else:
+            self.logger.info("GPT Vision: Disabled")
+        self.logger.info("=" * 70)
+    
     def save_debug_image(self, frame: np.ndarray, obstacles: List[Dict], action_plan: Dict):
         """Save debug image to disk"""
         if not self.config.get('save_debug_images', False):
@@ -463,9 +655,9 @@ class BrunoObstacleAvoidanceHeadless:
                 distance = obstacle['distance']
                 
                 # Color based on distance
-                if distance >= self.danger_threshold:
+                if distance <= 50:
                     color = (0, 0, 255)  # Red - danger
-                elif distance >= self.obstacle_threshold:
+                elif distance <= self.obstacle_threshold:
                     color = (0, 255, 255)  # Yellow - caution
                 else:
                     color = (0, 255, 0)  # Green - safe
@@ -486,38 +678,24 @@ class BrunoObstacleAvoidanceHeadless:
             cv2.putText(frame, message_text, (10, 60),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
+            # Add GPT status
+            if self.gpt_vision_enabled:
+                next_photo_in = max(0, self.gpt_photo_interval - (time.time() - self.last_gpt_photo_time))
+                gpt_text = f"Next GPT photo: {next_photo_in:.1f}s | Photos: {self.stats['gpt_photos_taken']}"
+                cv2.putText(frame, gpt_text, (10, 90),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            
             # Save image
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            filename = f"{debug_dir}/debug_{timestamp}_{self.frame_count:06d}.jpg"
+            filename = f"{debug_dir}/exploration_debug_{timestamp}_{self.frame_count:06d}.jpg"
             cv2.imwrite(filename, frame)
-            self.logger.info(f"Debug image saved: {filename}")
             
         except Exception as e:
             self.logger.error(f"Error saving debug image: {e}")
     
-    def print_status_report(self):
-        """Print periodic status report"""
-        if self.frame_count % self.config.get('status_report_interval', 100) != 0:
-            return
-        
-        elapsed_time = time.time() - self.start_time
-        fps = self.frame_count / elapsed_time if elapsed_time > 0 else 0
-        
-        self.logger.info("=" * 60)
-        self.logger.info("📊 BRUNO OBSTACLE AVOIDANCE STATUS REPORT")
-        self.logger.info("=" * 60)
-        self.logger.info(f"Runtime: {elapsed_time:.1f}s")
-        self.logger.info(f"Frames processed: {self.frame_count}")
-        self.logger.info(f"Average FPS: {fps:.1f}")
-        self.logger.info(f"Current action: {self.current_action}")
-        self.logger.info(f"Obstacles detected: {self.stats['obstacles_detected']}")
-        self.logger.info(f"Emergency stops: {self.stats['emergency_stops']}")
-        self.logger.info(f"Avoidance maneuvers: {self.stats['avoidance_maneuvers']}")
-        self.logger.info("=" * 60)
-    
     def start(self):
-        """Start obstacle avoidance system"""
-        self.logger.info("🚀 Starting Bruno Headless Obstacle Avoidance System")
+        """Start intelligent exploration system"""
+        self.logger.info("🚀 Starting Bruno Intelligent Exploration System")
         
         if not self.initialize_camera():
             return False
@@ -526,19 +704,49 @@ class BrunoObstacleAvoidanceHeadless:
         return True
     
     def stop(self):
-        """Stop obstacle avoidance system"""
+        """Stop intelligent exploration system"""
         self.is_running = False
         self.movement.stop()
         if self.cap:
             self.cap.release()
-        self.logger.info("🛑 Bruno Headless Obstacle Avoidance System stopped")
+        self.logger.info("🛑 Bruno Intelligent Exploration System stopped")
+    
+    def save_exploration_log(self):
+        """Save exploration session summary"""
+        try:
+            log_dir = "exploration_logs"
+            os.makedirs(log_dir, exist_ok=True)
+            
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            log_file = f"{log_dir}/exploration_session_{timestamp}.json"
+            
+            session_data = {
+                'session_start': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.start_time)),
+                'session_end': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'total_runtime': time.time() - self.start_time,
+                'statistics': self.stats,
+                'config': self.config,
+                'gpt_descriptions': self.gpt_descriptions
+            }
+            
+            with open(log_file, 'w') as f:
+                json.dump(session_data, f, indent=2)
+            
+            self.logger.info(f"📝 Exploration log saved: {log_file}")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving exploration log: {e}")
     
     def run(self):
-        """Main obstacle avoidance loop - no GUI display"""
+        """Main intelligent exploration loop"""
         if not self.start():
             return
         
-        self.logger.info("🤖 Headless obstacle avoidance running...")
+        self.logger.info("🤖 Intelligent exploration running...")
+        if self.gpt_vision_enabled:
+            self.logger.info(f"📸 GPT Vision enabled - photos every {self.gpt_photo_interval}s")
+        else:
+            self.logger.info("📸 GPT Vision disabled - obstacle avoidance only")
         self.logger.info("Press Ctrl+C to stop")
         
         try:
@@ -561,10 +769,14 @@ class BrunoObstacleAvoidanceHeadless:
                 # Execute avoidance action
                 self.execute_avoidance_action(action_plan)
                 
-                # Save debug image if enabled
+                # Process GPT Vision (every 20 seconds)
+                if self.gpt_vision_enabled:
+                    self.process_gpt_vision(frame)
+                
+                # Save debug image
                 self.save_debug_image(frame, obstacles, action_plan)
                 
-                # Print status report periodically
+                # Print status report
                 self.print_status_report()
                 
                 time.sleep(0.1)  # Control loop frequency
@@ -574,6 +786,7 @@ class BrunoObstacleAvoidanceHeadless:
         except Exception as e:
             self.logger.error(f"Runtime error: {e}")
         finally:
+            self.save_exploration_log()
             self.stop()
     
     def cleanup(self):
@@ -585,28 +798,28 @@ class BrunoObstacleAvoidanceHeadless:
 
 def signal_handler(signum, frame):
     """Handle shutdown signals"""
-    global bruno_avoidance
-    print("\n🛑 Shutting down Bruno Headless Obstacle Avoidance...")
-    if bruno_avoidance:
-        bruno_avoidance.stop()
+    global bruno_explorer
+    print("\n🛑 Shutting down Bruno Intelligent Exploration...")
+    if bruno_explorer:
+        bruno_explorer.stop()
 
 
 if __name__ == '__main__':
     # Global variable for signal handler
-    bruno_avoidance = None
+    bruno_explorer = None
     
     try:
         # Setup signal handling
         signal.signal(signal.SIGINT, signal_handler)
         
-        # Create and run obstacle avoidance system
+        # Create and run intelligent exploration system
         config = {
             'obstacle_threshold': 100,     # Start avoiding at 100px distance
             'danger_threshold': 50,        # Emergency stop at 50px (very close)
-            'normal_speed': 30,            # Slower normal speed for safety
-            'avoidance_speed': 20,         # Slower avoidance speed
+            'normal_speed': 25,            # Slower for safety with photo stops
+            'avoidance_speed': 15,         # Slower avoidance speed
             'camera_url': 'http://127.0.0.1:8080?action=stream',
-            'detection_area': {            # Area of frame to check for obstacles
+            'detection_area': {
                 'top': 0.4,               # 40% from top (focus on closer area)
                 'bottom': 0.9,            # 90% from top  
                 'left': 0.2,              # 20% from left (narrower focus)
@@ -614,33 +827,45 @@ if __name__ == '__main__':
             },
             'turn_time': 1.2,              # Longer turn time for better avoidance
             'backup_time': 1.0,            # Longer backup time
-            'save_debug_images': True,     # Save debug images for analysis
-            'debug_image_interval': 20,    # Save every 20 frames (more frequent)
-            'status_report_interval': 50,  # More frequent status reports
-            'movement': {                  # Movement controller config
-                'max_speed': 40,
+            'gpt_photo_interval': 20,      # Take photo every 20 seconds
+            'gpt_vision_prompt': "Describe what you see in this image. Focus on: objects, furniture, rooms, people, pets, bottles, bins/containers, obstacles, walls, and the general environment. Be concise but detailed.",
+            'save_debug_images': True,     # Save debug images
+            'save_gpt_images': True,       # Save GPT images
+            'debug_image_interval': 50,    # Debug image every 50 frames
+            'status_report_interval': 100, # Status every 100 frames
+            'movement': {
+                'max_speed': 35,
                 'min_speed': 10
             },
-            'navigation': {                # Navigation config
-                'forward_speed': 30,
-                'turn_speed': 25
+            'navigation': {
+                'forward_speed': 25,
+                'turn_speed': 20
             }
         }
         
-        bruno_avoidance = BrunoObstacleAvoidanceHeadless(config)
+        bruno_explorer = BrunoIntelligentExploration(config)
         
-        print("🤖 Bruno Headless Obstacle Avoidance System")
-        print("=" * 50)
-        print("Running without GUI display")
-        print("Debug images saved to: debug_images/")
-        print("Press CTRL+C to stop")
-        print("=" * 50)
+        print("🤖 Bruno Intelligent Exploration System")
+        print("=" * 60)
+        print("Features:")
+        print("  🛡️  Headless obstacle avoidance")
+        print("  📸 GPT Vision descriptions every 20 seconds")
+        print("  📊 Real-time exploration logging")
+        print("  🚫 Safe navigation with recovery")
+        print("")
+        print("Output:")
+        print("  📁 gpt_images/ - Photos sent to GPT Vision")
+        print("  📁 debug_images/ - Debug images with obstacles")
+        print("  📁 exploration_logs/ - Session summaries")
+        print("")
+        print("Press CTRL+C to stop and save session")
+        print("=" * 60)
         
-        bruno_avoidance.run()
+        bruno_explorer.run()
         
     except Exception as e:
         print(f"❌ Error: {e}")
     finally:
-        if bruno_avoidance:
-            bruno_avoidance.cleanup()
-        print("✅ Cleanup complete")
+        if bruno_explorer:
+            bruno_explorer.cleanup()
+        print("✅ Intelligent exploration cleanup complete")
