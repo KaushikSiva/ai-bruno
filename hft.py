@@ -44,6 +44,6 @@ if __name__ == "__main__":
     print(f"Generated Caption: {get_caption(url)}\n")
     
     # Example with a local file (replace 'brazil.jpg' with your image)
-    local_file = "brazil.jpg"
+    local_file = r"C:\Users\navee\Downloads\R9.jpg"
     print(f"Captioning local file: {local_file}")
     print(f"Generated Caption: {get_caption(local_file)}")
