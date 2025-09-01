@@ -173,7 +173,10 @@ class VisionClient:
             self.api_key = os.environ.get("HF_TOKEN")
             if self.api_key:
                 self.enabled = True
-                LOG.info("✓ Hugging Face BLIP Vision enabled")
+                LOG.info(f"✓ Hugging Face BLIP Vision enabled (token length: {len(self.api_key)})")
+            else:
+                LOG.error("✗ HF_TOKEN not found in environment variables")
+                LOG.error("Please set HF_TOKEN in your .env file or export HF_TOKEN=your_token")
         else:
             LOG.warning(f"Unknown provider: {self.provider}")
 
@@ -260,12 +263,22 @@ class VisionClient:
                             break
                             
                     except Exception as e:
-                        LOG.warning(f"HF API format {i+1} failed: {e}")
+                        LOG.error(f"HF API format {i+1} failed: {e}")
+                        # Log response details if available
+                        if hasattr(e, 'response') and e.response is not None:
+                            LOG.error(f"Response status: {e.response.status_code}")
+                            LOG.error(f"Response body: {e.response.text[:500]}")
+                        
                         if i == 0:  # For first failure, also try binary data
                             try:
                                 LOG.info("Trying binary data format...")
                                 headers_binary = {"Authorization": f"Bearer {self.api_key}"}
                                 resp = requests.post(api_url, headers=headers_binary, data=img_bytes, timeout=30)
+                                
+                                LOG.info(f"Binary request status: {resp.status_code}")
+                                if resp.status_code != 200:
+                                    LOG.error(f"Binary response: {resp.text[:500]}")
+                                
                                 resp.raise_for_status()
                                 result = resp.json()
                                 
@@ -279,7 +292,10 @@ class VisionClient:
                                     break
                                     
                             except Exception as e2:
-                                LOG.warning(f"Binary format also failed: {e2}")
+                                LOG.error(f"Binary format also failed: {e2}")
+                                if hasattr(e2, 'response') and e2.response is not None:
+                                    LOG.error(f"Binary response status: {e2.response.status_code}")
+                                    LOG.error(f"Binary response body: {e2.response.text[:500]}")
                         continue
                 
                 if not desc or not desc.strip():
