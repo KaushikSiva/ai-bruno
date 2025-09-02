@@ -1,0 +1,8 @@
+opencv-python
+Pillow
+requests
+numpy
+pandas
+# Optional for captioner stub:
+# transformers
+# torch
