@@ -128,20 +128,42 @@ class BrunoSurveillance:
                     self.cam.reopen()
 
                 if self.snapshotter.due():
-                    if last_good_frame is not None:
-                        LOG.info('🛑 STOP for snapshot (pre‑emptive)…')
-                        self.motion.stop()
-                        time.sleep(0.15)
-
-                        fresh = self.cam.get_fresh_frame(max_attempts=3, settle_reads=3)
-                        use_frame = fresh if fresh is not None else last_good_frame
-                        self._do_snapshot_and_caption(use_frame)
-
-                        if last_distance_cm is None or last_distance_cm > self.cfg['ultra_caution_cm']:
-                            self.motion.forward()
-                        time.sleep(0.2)
+                    LOG.info('📸 PHOTO TIME - Complete stop and fresh capture...')
+                    
+                    # COMPLETE STOP - ensure Bruno is stationary
+                    self.motion.stop()
+                    self.ultra.set_rgb(0, 0, 255)  # Blue = photo mode
+                    time.sleep(0.5)  # Wait for complete stop
+                    
+                    # Wait additional time to ensure no motion blur
+                    LOG.info('⏸️ Waiting for motion to settle...')
+                    time.sleep(0.3)
+                    
+                    # Get fresh frame (nuclear reconnection for built-in cameras)
+                    fresh_frame = self.cam.get_fresh_frame(max_attempts=3, settle_reads=3)
+                    
+                    if fresh_frame is not None:
+                        LOG.info('📷 Processing fresh stationary photo...')
+                        self._do_snapshot_and_caption(fresh_frame)
                     else:
-                        LOG.warning('⚠️  Snapshot due, but no frame available yet (skipping).')
+                        LOG.error('❌ Could not capture fresh frame after stop')
+                        # Use fallback frame if available
+                        if last_good_frame is not None:
+                            LOG.info('📷 Using fallback frame...')
+                            self._do_snapshot_and_caption(last_good_frame)
+                        else:
+                            LOG.warning('⚠️ Skipping photo - no frame available')
+                            self.snapshotter.mark()  # Mark to avoid immediate retry
+                    
+                    # Resume movement only if safe
+                    if last_distance_cm is None or last_distance_cm > self.cfg['ultra_caution_cm']:
+                        LOG.info('🚀 Resuming movement...')
+                        time.sleep(0.2)  # Brief pause before resuming
+                        self.motion.forward()
+                    else:
+                        LOG.info('⚠️ Not resuming - obstacle detected')
+                    
+                    time.sleep(0.1)
 
                 d_cm = self.ultra.get_distance_cm()
                 last_distance_cm = d_cm

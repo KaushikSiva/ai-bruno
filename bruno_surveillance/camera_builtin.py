@@ -97,17 +97,77 @@ class BuiltinCamera:
         return (ok and frame is not None), (frame if ok else None)
 
     def get_fresh_frame(self, max_attempts: int = 3, settle_reads: int = 3):
-        if not self.is_open(): return None
+        """
+        Nuclear option for built-in camera: Complete reconnection for each photo
+        to eliminate stream caching issues that cause image reuse.
+        """
+        LOG.info("🔄 Nuclear reconnection for fresh frame (built-in camera)...")
+        
+        # Store original connection for restore
+        original_cap = self.cap
+        original_method = self.method
+        
+        # Step 1: Close current connection completely (0.3s)
+        LOG.info("   1️⃣ Closing current camera connection...")
         try:
-            for _ in range(settle_reads):
-                self.cap.read(); time.sleep(0.02)
-            for _ in range(max_attempts):
-                ok, f = self.cap.read()
-                if ok and f is not None: return f
-                time.sleep(0.03)
-        except Exception:
+            if self.cap:
+                self.cap.release()
+            self.cap = None
+            time.sleep(0.3)  # Allow connection to close
+        except Exception as e:
+            LOG.warning(f"   ⚠️ Error closing connection: {e}")
+        
+        # Step 2: Open brand new connection (0.4s stabilize)
+        LOG.info("   2️⃣ Opening fresh camera connection...")
+        fresh_cap, fresh_method = _open_url(self.url)
+        
+        if not fresh_cap or not fresh_cap.isOpened():
+            LOG.error("   ❌ Failed to open fresh connection, restoring original")
+            # Restore original connection
+            self.cap = original_cap 
+            self.method = original_method
             return None
-        return None
+        
+        # Let the fresh stream stabilize
+        LOG.info("   ⏱️ Waiting for fresh stream to stabilize...")
+        time.sleep(0.4)
+        
+        # Step 3: Capture from fresh connection
+        fresh_frame = None
+        for attempt in range(max_attempts):
+            try:
+                ret, fresh_frame = fresh_cap.read()
+                if ret and fresh_frame is not None:
+                    LOG.info(f"   ✅ Got fresh frame from new connection (attempt {attempt + 1})")
+                    break
+                time.sleep(0.15)  # Between capture attempts
+            except Exception as e:
+                LOG.warning(f"   ⚠️ Fresh capture attempt {attempt + 1} failed: {e}")
+        
+        # Step 4: Close temporary connection
+        LOG.info("   3️⃣ Closing temporary connection...")
+        try:
+            fresh_cap.release()
+        except Exception:
+            pass
+        
+        # Step 5: Restore main connection (0.2s)
+        LOG.info("   4️⃣ Restoring main connection...")
+        time.sleep(0.2)
+        self.cap, self.method = _open_url(self.url)
+        
+        if not self.cap:
+            LOG.warning("   ⚠️ Failed to restore main connection")
+            # Try to use original as fallback
+            self.cap = original_cap
+            self.method = original_method
+        
+        if fresh_frame is not None:
+            LOG.info("   🎉 Nuclear reconnection successful - fresh frame captured!")
+            return fresh_frame
+        else:
+            LOG.error("   ❌ Nuclear reconnection failed - no fresh frame")
+            return None
 
     def reopen(self):
         try: self.release()
