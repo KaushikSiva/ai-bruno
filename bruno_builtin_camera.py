@@ -516,53 +516,66 @@ class BrunoBuiltinCameraSurveillance:
                     else:
                         last_good_frame = frame
 
-                # 2) Pre-emptive snapshot+caption (before avoidance)
+                # 2) Photo time: COMPLETE STOP → Take picture → Caption → Resume
                 if self.snapshotter.due():
-                    if last_good_frame is not None:
-                        LOG.info("🛑 STOP for snapshot (pre-emptive)…")
-                        self.stop_all()
-                        time.sleep(0.15)
-
-                        # Get a completely fresh frame from built-in camera stream
-                        fresh = None
-                        if self.cap and self.cap.isOpened():
-                            # Aggressive buffer flushing for stream-based cameras
-                            LOG.info("🔄 Flushing camera buffer for fresh frame...")
-                            for flush_attempt in range(5):
-                                try:
-                                    ret, _ = self.cap.read()  # Discard old buffered frames
-                                    if not ret:
-                                        break
-                                    time.sleep(0.05)  # Allow buffer to update
-                                except Exception:
-                                    break
-                            
-                            # Now get the fresh frame
-                            for fresh_attempt in range(3):
-                                try:
-                                    ret, fresh = self.cap.read()
-                                    if ret and fresh is not None:
-                                        LOG.info(f"✅ Got fresh frame from built-in camera (attempt {fresh_attempt + 1})")
-                                        break
-                                    time.sleep(0.1)
-                                except Exception as e:
-                                    LOG.warning(f"Fresh frame attempt {fresh_attempt + 1} failed: {e}")
+                    LOG.info("📸 PHOTO TIME - Stopping all movement...")
+                    
+                    # COMPLETE STOP - ensure Bruno is stationary
+                    self.stop_all()
+                    self.ultra.set_rgb(0, 0, 255)  # Blue = photo mode
+                    time.sleep(0.5)  # Wait for complete stop
+                    
+                    # Wait additional time to ensure no motion blur
+                    LOG.info("⏸️ Waiting for motion to settle...")
+                    time.sleep(0.3)
+                    
+                    # Get completely fresh frame AFTER stopping
+                    fresh_frame = None
+                    if self.cap and self.cap.isOpened():
+                        LOG.info("🔄 Getting fresh stationary frame...")
                         
-                        if fresh is not None:
-                            use_frame = fresh
-                            LOG.info("📸 Using fresh captured frame")
-                        else:
-                            use_frame = last_good_frame
-                            LOG.warning("⚠️ Using last good frame (could not get fresh frame)")
-                        self._do_snapshot_and_caption(use_frame)
-
-                        # Resume forward if ultrasonic is currently safe (or unknown)
-                        if last_distance_cm is None or last_distance_cm > self.cfg["ultra_caution_cm"]:
-                            self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
-
+                        # Flush ALL old frames that were captured while moving
+                        for flush_i in range(10):  # Aggressive flush
+                            try:
+                                ret, _ = self.cap.read()
+                                if not ret:
+                                    break
+                                time.sleep(0.08)  # Allow stream to update
+                            except Exception:
+                                break
+                        
+                        # Wait a moment for camera to settle
                         time.sleep(0.2)
+                        
+                        # Now capture the fresh stationary frame
+                        for attempt in range(5):
+                            try:
+                                ret, fresh_frame = self.cap.read()
+                                if ret and fresh_frame is not None:
+                                    LOG.info(f"✅ Captured fresh stationary frame (attempt {attempt + 1})")
+                                    break
+                                time.sleep(0.1)
+                            except Exception as e:
+                                LOG.warning(f"Frame capture attempt {attempt + 1} failed: {e}")
+                        
+                        if fresh_frame is None:
+                            LOG.error("❌ Could not capture fresh frame after stopping")
+                            # Skip this photo cycle
+                            self.snapshotter.mark()  # Mark as taken to avoid immediate retry
+                        else:
+                            # Process the photo
+                            LOG.info("📷 Processing stationary photo...")
+                            self._do_snapshot_and_caption(fresh_frame)
+                    
+                    # Resume movement only if safe
+                    if last_distance_cm is None or last_distance_cm > self.cfg["ultra_caution_cm"]:
+                        LOG.info("🚀 Resuming movement...")
+                        time.sleep(0.2)  # Brief pause before resuming
+                        self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
                     else:
-                        LOG.warning("⚠️  Snapshot due, but no frame available yet (skipping).")
+                        LOG.info("⚠️ Not resuming - obstacle detected")
+                    
+                    time.sleep(0.1)
 
                 # 3) Ultrasonic avoidance + EMERGENCY persistence logic
                 d_cm = self.ultra.get_distance_cm()
