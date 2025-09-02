@@ -529,43 +529,50 @@ class BrunoBuiltinCameraSurveillance:
                     LOG.info("⏸️ Waiting for motion to settle...")
                     time.sleep(0.3)
                     
-                    # Get completely fresh frame AFTER stopping
+                    # Force fresh connection for each photo to avoid stream caching
                     fresh_frame = None
-                    if self.cap and self.cap.isOpened():
-                        LOG.info("🔄 Getting fresh stationary frame...")
+                    LOG.info("🔄 Reconnecting camera for fresh frame...")
+                    
+                    # Close current connection
+                    if self.cap:
+                        self.cap.release()
+                        time.sleep(0.3)  # Allow connection to close
+                    
+                    # Open fresh connection
+                    temp_cap, method = open_builtin_camera()
+                    if temp_cap and temp_cap.isOpened():
+                        LOG.info(f"✅ Fresh camera connection established: {method}")
                         
-                        # Flush ALL old frames that were captured while moving
-                        for flush_i in range(10):  # Aggressive flush
+                        # Let the fresh stream stabilize
+                        time.sleep(0.4)
+                        
+                        # Capture from fresh connection
+                        for attempt in range(3):
                             try:
-                                ret, _ = self.cap.read()
-                                if not ret:
-                                    break
-                                time.sleep(0.08)  # Allow stream to update
-                            except Exception:
-                                break
-                        
-                        # Wait a moment for camera to settle
-                        time.sleep(0.2)
-                        
-                        # Now capture the fresh stationary frame
-                        for attempt in range(5):
-                            try:
-                                ret, fresh_frame = self.cap.read()
+                                ret, fresh_frame = temp_cap.read()
                                 if ret and fresh_frame is not None:
-                                    LOG.info(f"✅ Captured fresh stationary frame (attempt {attempt + 1})")
+                                    LOG.info(f"✅ Got fresh frame from new connection (attempt {attempt + 1})")
                                     break
-                                time.sleep(0.1)
+                                time.sleep(0.15)
                             except Exception as e:
-                                LOG.warning(f"Frame capture attempt {attempt + 1} failed: {e}")
+                                LOG.warning(f"Fresh connection frame attempt {attempt + 1} failed: {e}")
                         
-                        if fresh_frame is None:
-                            LOG.error("❌ Could not capture fresh frame after stopping")
-                            # Skip this photo cycle
-                            self.snapshotter.mark()  # Mark as taken to avoid immediate retry
-                        else:
-                            # Process the photo
-                            LOG.info("📷 Processing stationary photo...")
+                        # Close the temporary connection
+                        temp_cap.release()
+                        
+                        # Restore main connection for normal operation
+                        time.sleep(0.2)
+                        self.cap, _ = open_builtin_camera()
+                        
+                        if fresh_frame is not None:
+                            LOG.info("📷 Processing fresh reconnected frame...")
                             self._do_snapshot_and_caption(fresh_frame)
+                        else:
+                            LOG.error("❌ Could not capture fresh frame from new connection")
+                            self.snapshotter.mark()  # Mark as taken to avoid immediate retry
+                    else:
+                        LOG.error("❌ Could not establish fresh camera connection")
+                        self.snapshotter.mark()  # Mark as taken to avoid immediate retry
                     
                     # Resume movement only if safe
                     if last_distance_cm is None or last_distance_cm > self.cfg["ultra_caution_cm"]:
