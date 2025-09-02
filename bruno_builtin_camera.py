@@ -78,7 +78,7 @@ if os.path.exists(".env"):
 
 PHOTO_INTERVAL = int(os.environ.get("PHOTO_INTERVAL_SEC", "15"))
 SUMMARY_DELAY = int(os.environ.get("SUMMARY_DELAY_SEC", "120"))  # 2 minutes by default
-LLM_API_BASE  = os.environ.get("LLM_API_BASE", "http://localhost:1234/v1")
+LLM_API_BASE  = os.environ.get("LLM_API_BASE", "http://192.168.1.154:1234/v1")
 LLM_MODEL     = os.environ.get("LLM_MODEL", "lmstudio")
 LLM_TIMEOUT   = float(os.environ.get("LLM_TIMEOUT_SEC", "30"))
 
@@ -354,8 +354,26 @@ def summarize_captions_lmstudio(captions: List[Dict]) -> str:
         r = requests.post(url, json=payload, headers=headers, timeout=LLM_TIMEOUT)
         r.raise_for_status()
         data = r.json()
-        summary = data["choices"][0]["message"]["content"]
-        return summary.strip()
+        
+        # Debug the response structure
+        LOG.info(f"LM Studio response keys: {list(data.keys())}")
+        
+        if "choices" in data and len(data["choices"]) > 0:
+            if "message" in data["choices"][0]:
+                summary = data["choices"][0]["message"]["content"]
+                return summary.strip()
+            elif "text" in data["choices"][0]:
+                summary = data["choices"][0]["text"]
+                return summary.strip()
+        
+        # Fallback: try to find content anywhere in response
+        if "content" in data:
+            return data["content"].strip()
+        
+        return f"[LM Studio summary failed] Unexpected response format: {data}"
+        
+    except requests.exceptions.RequestException as e:
+        return f"[LM Studio connection failed] {e}"
     except Exception as e:
         return f"[LM Studio summary failed] {e}"
 
