@@ -345,37 +345,63 @@ def summarize_captions_lmstudio(captions: List[Dict]) -> str:
         "temperature": 0.2,
         "max_tokens": 400
     }
-    url = LLM_API_BASE.rstrip("/") + "/chat/completions"
+    # Try different LM Studio endpoints
+    base_url = LLM_API_BASE.rstrip("/")
+    if base_url.endswith("/v1"):
+        base_url = base_url[:-3]  # Remove /v1 if present
+    
+    possible_urls = [
+        f"{base_url}/v1/chat/completions",  # Standard OpenAI compatible
+        f"{base_url}/chat/completions",     # Without v1
+        f"{base_url}/api/chat/completions", # Alternative path
+        f"{base_url}/v1/completions",       # Legacy completions endpoint
+    ]
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'lm-studio')}"
     }
-    try:
-        r = requests.post(url, json=payload, headers=headers, timeout=LLM_TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-        
-        # Debug the response structure
-        LOG.info(f"LM Studio response keys: {list(data.keys())}")
-        
-        if "choices" in data and len(data["choices"]) > 0:
-            if "message" in data["choices"][0]:
-                summary = data["choices"][0]["message"]["content"]
-                return summary.strip()
-            elif "text" in data["choices"][0]:
-                summary = data["choices"][0]["text"]
-                return summary.strip()
-        
-        # Fallback: try to find content anywhere in response
-        if "content" in data:
-            return data["content"].strip()
-        
-        return f"[LM Studio summary failed] Unexpected response format: {data}"
-        
-    except requests.exceptions.RequestException as e:
-        return f"[LM Studio connection failed] {e}"
-    except Exception as e:
-        return f"[LM Studio summary failed] {e}"
+    
+    # Try each endpoint until one works
+    last_error = None
+    for url in possible_urls:
+        try:
+            LOG.info(f"Trying LM Studio endpoint: {url}")
+            r = requests.post(url, json=payload, headers=headers, timeout=LLM_TIMEOUT)
+            r.raise_for_status()
+            data = r.json()
+            
+            # Debug the response structure
+            LOG.info(f"LM Studio response keys: {list(data.keys())}")
+            
+            if "choices" in data and len(data["choices"]) > 0:
+                if "message" in data["choices"][0]:
+                    summary = data["choices"][0]["message"]["content"]
+                    LOG.info(f"✅ LM Studio summary successful via {url}")
+                    return summary.strip()
+                elif "text" in data["choices"][0]:
+                    summary = data["choices"][0]["text"]
+                    LOG.info(f"✅ LM Studio summary successful via {url}")
+                    return summary.strip()
+            
+            # Fallback: try to find content anywhere in response
+            if "content" in data:
+                LOG.info(f"✅ LM Studio summary successful via {url} (fallback)")
+                return data["content"].strip()
+            
+            # If we get here, response format was unexpected but not an error
+            LOG.warning(f"Unexpected response format from {url}: {data}")
+            last_error = f"Unexpected response format: {data}"
+            
+        except requests.exceptions.RequestException as e:
+            LOG.warning(f"Connection failed for {url}: {e}")
+            last_error = f"Connection failed: {e}"
+            continue
+        except Exception as e:
+            LOG.warning(f"Error with {url}: {e}")
+            last_error = f"Error: {e}"
+            continue
+    
+    return f"[LM Studio summary failed] All endpoints failed. Last error: {last_error}"
 
 # ---------- Main ----------
 class BrunoBuiltinCameraSurveillance:
