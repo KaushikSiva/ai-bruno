@@ -14,7 +14,7 @@ sys.path.append('/home/pi/MasterPi')
 
 # Local imports
 from utils import LOG, paths, load_env, get_env_int, get_env_float
-from camera_setup import find_working_external_camera
+from camera_setup import CameraManager
 from ultrasonic import UltrasonicRGB
 from snapshotter import Snapshotter
 from caption_pipeline import caption_image
@@ -55,8 +55,12 @@ class BrunoExternalCameraSurveillance:
             turn_speed=cfg['turn_speed']
         )
         self.ultra = UltrasonicRGB()
-        self.cap = None
-        self.camera_info = None
+
+        # >>> camera now fully managed by CameraManager <<<
+        self.cam = CameraManager(
+            retry_attempts=cfg['camera_retry_attempts'],
+            retry_delay=cfg['camera_retry_delay']
+        )
 
         self.snapshotter = Snapshotter(cfg['photo_interval'])
         self.start_time = time.time()
@@ -69,17 +73,7 @@ class BrunoExternalCameraSurveillance:
 
     def _open_camera(self) -> bool:
         LOG.info('🎥 Opening external camera...')
-        for attempt in range(self.cfg['camera_retry_attempts']):
-            LOG.info(f'📹 Camera connection attempt {attempt + 1}...')
-            self.cap, self.camera_info = find_working_external_camera()
-            if self.cap:
-                LOG.info(f"✅ External camera connected: {self.camera_info['path']}")
-                return True
-            if attempt < self.cfg['camera_retry_attempts'] - 1:
-                LOG.info(f"⏳ Retrying in {self.cfg['camera_retry_delay']} seconds...")
-                time.sleep(self.cfg['camera_retry_delay'])
-        LOG.error('❌ Failed to connect external camera')
-        return False
+        return self.cam.open()
 
     def _do_snapshot_and_caption(self, frame) -> None:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -128,35 +122,24 @@ class BrunoExternalCameraSurveillance:
         try:
             while running:
                 self.frame_idx += 1
-                frame = None
 
-                # Grab frame
-                if self.cap and self.cap.isOpened():
-                    ok, frame = self.cap.read()
-                    if not ok or frame is None:
-                        LOG.warning('📹 Camera read failed; attempting reconnection...')
-                        self.cap.release()
-                        time.sleep(1)
-                        self._open_camera()
-                    else:
-                        last_good_frame = frame
+                # --- unified read via CameraManager ---
+                ok, frame = self.cam.read()
+                if ok and frame is not None:
+                    last_good_frame = frame
+                elif not ok:
+                    LOG.warning('📹 Camera read failed; attempting reconnection...')
+                    self.cam.reopen()
 
                 # Snapshot cadence
                 if self.snapshotter.due():
                     if last_good_frame is not None:
-                        LOG.info('🛑 STOP for snapshot (pre‑emptive)…')
+                        LOG.info('🛑 STOP for snapshot (pre-emptive)…')
                         self.motion.stop()
                         time.sleep(0.15)
 
-                        fresh = None
-                        if self.cap and self.cap.isOpened():
-                            for _ in range(3):
-                                self.cap.read(); time.sleep(0.02)
-                            for _ in range(3):
-                                ok, fresh = self.cap.read()
-                                if ok and fresh is not None:
-                                    break
-                                time.sleep(0.03)
+                        # Try to get a fresh frame via the camera manager
+                        fresh = self.cam.get_fresh_frame(max_attempts=3, settle_reads=3)
                         use_frame = fresh if fresh is not None else last_good_frame
                         self._do_snapshot_and_caption(use_frame)
 
@@ -221,7 +204,7 @@ class BrunoExternalCameraSurveillance:
                     self.emergency_reversed_once = False
                     self.motion.forward()
 
-                # Time‑based summary
+                # Time-based summary
                 self._maybe_finish_with_summary()
                 time.sleep(0.03)
 
@@ -238,8 +221,7 @@ class BrunoExternalCameraSurveillance:
         LOG.info('Shutting down...')
         self.motion.stop()
         try:
-            if self.cap:
-                self.cap.release()
+            self.cam.release()
         except Exception:
             pass
         try:
@@ -251,7 +233,7 @@ RUNNER: Optional[BrunoExternalCameraSurveillance] = None
 
 def _sig_handler(signum, frame):
     global RUNNER
-    print('\n🛑 Ctrl‑C received; stopping...')
+    print('\n🛑 Ctrl-C received; stopping...')
     if RUNNER:
         RUNNER.shutdown()
     sys.exit(0)
