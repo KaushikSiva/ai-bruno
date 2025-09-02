@@ -403,6 +403,10 @@ class BrunoBuiltinCameraSurveillance:
             pass
 
     def _do_snapshot_and_caption(self, frame) -> None:
+        # Add frame hash to detect if we're reusing the same frame
+        frame_hash = hash(frame.tobytes())
+        LOG.info(f"📸 Processing frame with hash: {frame_hash}")
+        
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)
         img_path = save_image_path("builtin_camera_photo")
@@ -421,7 +425,7 @@ class BrunoBuiltinCameraSurveillance:
         except Exception as e:
             LOG.warning(f"⚠️  Failed to write caption file: {e}")
 
-        self.captions.append({"timestamp": ts, "path": str(img_path), "caption": cap_text})
+        self.captions.append({"timestamp": ts, "path": str(img_path), "caption": cap_text, "frame_hash": frame_hash})
 
     def _finish_with_summary_and_exit(self, reason: str):
         LOG.warning(f"⏹️  Triggering early summary due to: {reason}")
@@ -475,19 +479,37 @@ class BrunoBuiltinCameraSurveillance:
                         self.stop_all()
                         time.sleep(0.15)
 
-                        # Try to get a fresh frame from built-in camera stream
+                        # Get a completely fresh frame from built-in camera stream
                         fresh = None
                         if self.cap and self.cap.isOpened():
-                            # Flush buffer for fresh frames
-                            for _ in range(3):
-                                self.cap.read(); time.sleep(0.02)
-                            for _ in range(3):
-                                ok, fresh = self.cap.read()
-                                if ok and fresh is not None:
-                                    LOG.info("✅ Got fresh frame from built-in camera")
+                            # Aggressive buffer flushing for stream-based cameras
+                            LOG.info("🔄 Flushing camera buffer for fresh frame...")
+                            for flush_attempt in range(5):
+                                try:
+                                    ret, _ = self.cap.read()  # Discard old buffered frames
+                                    if not ret:
+                                        break
+                                    time.sleep(0.05)  # Allow buffer to update
+                                except Exception:
                                     break
-                                time.sleep(0.03)
-                        use_frame = fresh if fresh is not None else last_good_frame
+                            
+                            # Now get the fresh frame
+                            for fresh_attempt in range(3):
+                                try:
+                                    ret, fresh = self.cap.read()
+                                    if ret and fresh is not None:
+                                        LOG.info(f"✅ Got fresh frame from built-in camera (attempt {fresh_attempt + 1})")
+                                        break
+                                    time.sleep(0.1)
+                                except Exception as e:
+                                    LOG.warning(f"Fresh frame attempt {fresh_attempt + 1} failed: {e}")
+                        
+                        if fresh is not None:
+                            use_frame = fresh
+                            LOG.info("📸 Using fresh captured frame")
+                        else:
+                            use_frame = last_good_frame
+                            LOG.warning("⚠️ Using last good frame (could not get fresh frame)")
                         self._do_snapshot_and_caption(use_frame)
 
                         # Resume forward if ultrasonic is currently safe (or unknown)
