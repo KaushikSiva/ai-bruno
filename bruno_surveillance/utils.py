@@ -21,12 +21,12 @@ class Paths:
     def sidecar_txt_path(self,img_path:Path)->Path: return img_path.with_suffix('.txt')
     @staticmethod
     def safe_write_text(path:Path, content:str):
-        try: path.write_text(content,encoding='utf-8'); LOG.info(f'💾 Saved: {path}')
-        except Exception as e: LOG.warning(f'⚠️  Failed to write file {path}: {e}')
+        try: path.write_text(content,encoding='utf-8'); LOG.info(f'Saved: {path}')
+        except Exception as e: LOG.warning(f'WARNING: Failed to write file {path}: {e}')
 def ensure_relative_paths()->Paths:
     base=Path.cwd(); p=Paths(base=base,gpt_images=base/'gpt_images',logs=base/'logs',debug=base/'debug')
     for d in (p.gpt_images,p.logs,p.debug): d.mkdir(parents=True,exist_ok=True)
-    LOG.info(f'Working directory: {p.base}'); LOG.info(f'Images → {p.gpt_images}'); LOG.info(f'Logs → {p.logs}'); return p
+    LOG.info(f'Working directory: {p.base}'); LOG.info(f'Images -> {p.gpt_images}'); LOG.info(f'Logs -> {p.logs}'); return p
 paths=ensure_relative_paths(); save_image_path=paths.save_image_path; sidecar_txt_path=paths.sidecar_txt_path; safe_write_text=paths.safe_write_text
 def load_env():
     if os.path.exists('.env'):

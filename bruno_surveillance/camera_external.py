@@ -72,7 +72,7 @@ def find_working_external_camera() -> Tuple[Optional[cv2.VideoCapture], Optional
     for c in sorted(cams, key=lambda x: x['index']):
         cap, method = open_external_camera_robust(c)
         if cap:
-            LOG.info(f'✅ Successfully opened {c['path']} using {method}')
+            LOG.info(f'✅ Successfully opened {c["path"]} using {method}')
             return cap, c
     LOG.error('❌ No working external cameras found'); return None, None
 
