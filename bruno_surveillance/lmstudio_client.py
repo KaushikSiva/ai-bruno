@@ -17,7 +17,7 @@ def _extract_content(data: Dict[str, Any]) -> str:
     if isinstance(data.get('error'), dict):
         msg = data['error'].get('message') or data['error'].get('error') or str(data['error'])
         return f'[LM Studio error] {msg}'
-    if isinstance(data.get('error'), str): return f'[LM Studio error] {data['error']}'
+    if isinstance(data.get('error'), str): return f'[LM Studio error] {data["error"]}'
     return f'[Unexpected response format] keys={list(data.keys())}'
 
 def summarize_captions_lmstudio(captions: List[Dict]) -> str:
