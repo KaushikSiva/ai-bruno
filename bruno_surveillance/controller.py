@@ -168,8 +168,8 @@ class BrunoController:
         print('=' * 80 + '\n')
         try:
             if self.speaker:
-                self.speaker.say(summary)
-                self.speaker.wait_idle(timeout=45.0)
+                # Speak summary synchronously on main thread before shutdown
+                self.speaker.speak_sync(summary)
         except Exception:
             pass
         self.shutdown()
@@ -189,7 +189,8 @@ class BrunoController:
     def _greet(self):
         try:
             if self.speaker:
-                self.speaker.say("Hey, I'm Bruno")
+                # Speak greeting synchronously so it's definitely heard
+                self.speaker.speak_sync("Hey, I'm Bruno")
         except Exception:
             pass
 

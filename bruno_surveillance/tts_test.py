@@ -27,5 +27,11 @@ def main():
     out.write_bytes(audio)
     print(f'Wrote {out}')
 
+    # Play the audio using the same routine the app uses
+    try:
+        sp._play_audio(audio)
+    except Exception as e:
+        print(f'Playback failed: {e}. File saved at {out}')
+
 if __name__ == '__main__':
     main()

@@ -61,6 +61,20 @@ class TTSSpeaker:
             t = t[:780] + '…'
         self._q.put(t)
 
+    def speak_sync(self, text: str) -> None:
+        """Synthesize and play immediately on the calling (main) thread."""
+        if not self.enabled:
+            return
+        t = (text or '').strip()
+        if not t:
+            return
+        try:
+            audio = self._synthesize_tts(t)
+            if audio:
+                self._play_audio(audio)
+        except Exception as e:
+            LOG.warning(f'TTS sync playback failed: {e}')
+
     def wait_idle(self, timeout: Optional[float] = None) -> bool:
         """Block until the queue empties (best-effort). Returns True if empty."""
         if not self.enabled:
