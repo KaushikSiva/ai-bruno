@@ -200,11 +200,16 @@ class TTSSpeaker:
                         time.sleep(0.05)
             return
 
-        # Fallback: write to temp WAV and invoke system player (aplay/ffplay)
+        # Fallback: write to temp WAV and invoke system player (aplay/ffplay) with max volume
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as tmp:
             tmp.write(wav_bytes)
             tmp.flush()
-            for cmd in (["aplay", "-q", tmp.name], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", tmp.name]):
+            # Set system volume to max before playing
+            try:
+                subprocess.run(["amixer", "set", "Master", "100%"], capture_output=True, timeout=5)
+            except:
+                pass
+            for cmd in (["aplay", "-q", tmp.name], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-volume", "100", tmp.name]):
                 try:
                     subprocess.run(cmd, timeout=120)
                     return
