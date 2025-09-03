@@ -130,7 +130,7 @@ class TTSSpeaker:
         }
         payload = {
             'text': text,
-            'voiceId': 'Ashley',
+            'voiceId': self.voice or 'Ashley',
             'modelId': 'inworld-tts-1',
             'audio_config': {
                 'audio_encoding': 'LINEAR16',

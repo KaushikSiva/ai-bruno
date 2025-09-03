@@ -53,7 +53,8 @@ class BrunoController:
         # Captions buffer and timeline
         self.captions: List[Dict] = []
         self.start_time = time.time()
-        self.summary_due_at = self.start_time + self.cfg.summary_delay
+        # Force run duration to 60 seconds regardless of env/config
+        self.summary_due_at = self.start_time + 60
         self.frame_idx = 0
 
         # Optional speech
