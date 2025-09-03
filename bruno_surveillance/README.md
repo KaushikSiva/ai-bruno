@@ -39,6 +39,12 @@ BRUNO_BACKUP_TIME=0.0
 # Audio (optional; off by default). Also supports CLI flags --audio / --talk
 BRUNO_AUDIO_ENABLED=false
 BRUNO_AUDIO_VOICE=alloy
+
+# Caption backend (local HF or Groq Vision)
+CAPTION_BACKEND=local        # or groq
+GROQ_API_KEY=                # required if CAPTION_BACKEND=groq
+GROQ_VISION_MODEL=llama-4-maverick-17b-128e-instruct
+GROQ_API_BASE=https://api.groq.com/openai/v1
 ```
 
 ## Notes
@@ -46,6 +52,13 @@ BRUNO_AUDIO_VOICE=alloy
 - Cameras are modular: `camera_shared.py` chooses `camera_builtin.py` or `camera_external.py`.
 - `captioner.py` is a minimal stub that tries HF `transformers` if present. Replace it with your existing local captioner for best results.
 - Hiwonder SDK modules (e.g., `common.sonar`, `common.mecanum`) come from your robot image under `/home/pi/MasterPi`.
+
+## Groq Vision backend
+- To switch from local BLIP to Groq’s Llama‑4 Maverick vision model:
+  - Set `CAPTION_BACKEND=groq` and `GROQ_API_KEY` in your environment or `.env`.
+  - Optional: change `GROQ_VISION_MODEL` (defaults to `llama-4-maverick-17b-128e-instruct`).
+  - The app will send each snapshot as a data URL to Groq’s OpenAI‑compatible `chat/completions` and use the response as the caption.
+  - Or use CLI: `--caption-backend groq` (requires `GROQ_API_KEY`).
 
 ## Audio TTS (optional)
 - When enabled (via `.env BRUNO_AUDIO_ENABLED=1` or `--audio`/`--talk`), Bruno speaks on a background thread:
@@ -57,6 +70,7 @@ BRUNO_AUDIO_VOICE=alloy
 
 Env:
 - `CAM_MODE` = builtin | external
+- `--caption-backend` = local | groq (CLI override for CAPTION_BACKEND)
 - `PHOTO_INTERVAL_SEC` (default 15)
 - `SUMMARY_DELAY_SEC` (default 120)
 - `LLM_API_BASE` (default http://localhost:1234/v1)
