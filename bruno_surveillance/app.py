@@ -12,6 +12,7 @@ def main():
     parser.add_argument('--mode', choices=['builtin', 'external'], default=os.environ.get('CAM_MODE', 'external'), help='Camera mode')
     parser.add_argument('--audio', '--talk', dest='audio', action='store_true', help='Enable TTS speech')
     parser.add_argument('--voice', default=os.environ.get('BRUNO_AUDIO_VOICE', 'alloy'), help='TTS voice')
+    parser.add_argument('--audio-backend', choices=['openai','local'], default=os.environ.get('BRUNO_AUDIO_BACKEND','openai'), help='Audio TTS backend')
     parser.add_argument('--caption-backend', choices=['local','groq'], default=os.environ.get('CAPTION_BACKEND','local'), help='Choose captioning backend')
     args = parser.parse_args()
 
@@ -27,7 +28,7 @@ def main():
 
     # Import controller lazily so caption backend is set first
     from controller import run as run_controller
-    run_controller(mode=args.mode, audio_enabled=audio_enabled, audio_voice=args.voice)
+    run_controller(mode=args.mode, audio_enabled=audio_enabled, audio_voice=args.voice, audio_backend=args.audio_backend)
 
 
 if __name__ == '__main__':

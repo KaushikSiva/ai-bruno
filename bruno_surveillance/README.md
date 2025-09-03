@@ -39,6 +39,9 @@ BRUNO_BACKUP_TIME=0.0
 # Audio (optional; off by default). Also supports CLI flags --audio / --talk
 BRUNO_AUDIO_ENABLED=false
 BRUNO_AUDIO_VOICE=alloy
+BRUNO_AUDIO_BACKEND=openai    # or local (uses tts_voice.speak)
+BRUNO_AUDIO_LOCAL_MODULE=tts_voice.speak
+BRUNO_AUDIO_LOCAL_FUNC=speak
 
 # Caption backend (local HF or Groq Vision)
 CAPTION_BACKEND=local        # or groq
@@ -67,6 +70,9 @@ GROQ_API_BASE=https://api.groq.com/openai/v1
   - Final LM Studio summary
 - Uses OpenAI TTS (model `gpt-4o-mini-tts`, voice `alloy`) and requires `OPENAI_API_KEY`.
 - Playback uses `simpleaudio` if available, or falls back to `aplay`/`ffplay`.
+ - To use your local TTS (`tts_voice/speak.py`): set `--audio-backend local` (or `BRUNO_AUDIO_BACKEND=local`).
+   - By default, it imports `tts_voice.speak` and calls the `speak(text)` function.
+   - Override module/function via `BRUNO_AUDIO_LOCAL_MODULE` and `BRUNO_AUDIO_LOCAL_FUNC` if needed.
 
 Env:
 - `CAM_MODE` = builtin | external

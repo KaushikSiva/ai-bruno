@@ -5,7 +5,7 @@ import queue
 import threading
 import tempfile
 import subprocess
-from typing import Optional
+from typing import Optional, Callable
 
 import requests
 
@@ -28,16 +28,35 @@ class TTSSpeaker:
                  enabled: bool,
                  voice: str = 'alloy',
                  model: str = 'gpt-4o-mini-tts',
-                 api_base: str = 'https://api.openai.com/v1'):
+                 api_base: str = 'https://api.openai.com/v1',
+                 backend: str = 'openai'):
         self.enabled = bool(enabled)
         self.voice = voice
         self.model = model
         self.api_base = api_base.rstrip('/')
+        self.backend = (backend or 'openai').strip().lower()
 
         self.api_key = os.environ.get('OPENAI_API_KEY')
-        if self.enabled and not self.api_key:
-            LOG.warning('Audio enabled, but OPENAI_API_KEY is missing. Disabling TTS.')
-            self.enabled = False
+        self._local_speak: Optional[Callable[[str], None]] = None
+
+        if self.enabled:
+            if self.backend == 'openai':
+                if not self.api_key:
+                    LOG.warning('Audio backend openai selected, but OPENAI_API_KEY is missing. Disabling TTS.')
+                    self.enabled = False
+            elif self.backend == 'local':
+                # Try to import a local speak function: module and func can be overridden via env
+                mod_path = os.environ.get('BRUNO_AUDIO_LOCAL_MODULE', 'tts_voice.speak')
+                func_name = os.environ.get('BRUNO_AUDIO_LOCAL_FUNC', 'speak')
+                try:
+                    module = __import__(mod_path, fromlist=[func_name])
+                    self._local_speak = getattr(module, func_name)
+                    LOG.info(f'Audio backend: local ({mod_path}.{func_name})')
+                except Exception as e:
+                    LOG.warning(f'Local audio backend import failed ({mod_path}.{func_name}): {e}. Falling back to openai.')
+                    self.backend = 'openai'
+                    if not self.api_key:
+                        self.enabled = False
 
         self._q: queue.Queue[str] = queue.Queue()
         self._stop = threading.Event()
@@ -104,9 +123,13 @@ class TTSSpeaker:
             except queue.Empty:
                 continue
             try:
-                audio = self._synthesize_tts(text)
-                if audio:
-                    self._play_audio(audio)
+                if self.backend == 'local' and self._local_speak is not None:
+                    # Delegate playback to local function
+                    self._local_speak(text)
+                else:
+                    audio = self._synthesize_tts(text)
+                    if audio:
+                        self._play_audio(audio)
             except Exception as e:
                 LOG.warning(f'TTS playback failed: {e}')
             finally:
