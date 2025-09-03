@@ -34,7 +34,7 @@ except Exception as e:
 class BrunoController:
     """Main runtime: camera → snapshot/caption → safety → summary."""
 
-    def __init__(self, mode: str, audio_enabled: bool = False, audio_voice: str = 'default', audio_backend: str = 'inworld'):
+    def __init__(self, mode: str, audio_enabled: bool = False, audio_voice: str = 'Ashley'):
         self.cfg: Settings = load_settings()
         self.mode = mode
 
@@ -60,7 +60,7 @@ class BrunoController:
         self.speaker = None
         if audio_enabled:
             try:
-                self.speaker = TTSSpeaker(enabled=True, voice=audio_voice, backend=audio_backend)
+                self.speaker = TTSSpeaker(enabled=True, voice=audio_voice)
                 self.speaker.start()
                 LOG.info('🔊 Audio TTS enabled')
             except Exception as e:
@@ -208,8 +208,8 @@ def _sig_handler(signum, frame):
     sys.exit(0)
 
 
-def run(mode: str, audio_enabled: bool = False, audio_voice: str = 'alloy', audio_backend: str = 'openai'):
+def run(mode: str, audio_enabled: bool = False, audio_voice: str = 'Ashley'):
     signal.signal(signal.SIGINT, _sig_handler)
     global RUNNER
-    RUNNER = BrunoController(mode=mode, audio_enabled=audio_enabled, audio_voice=audio_voice, audio_backend=audio_backend)
+    RUNNER = BrunoController(mode=mode, audio_enabled=audio_enabled, audio_voice=audio_voice)
     RUNNER.run()

@@ -7,52 +7,28 @@ import tempfile
 import subprocess
 from typing import Optional, Callable
 
+import json
+import base64
+import wave
+
 import requests
 
 from utils import LOG
 
 
 class TTSSpeaker:
-    """
-    Background TTS speaker (Inworld or local backend).
+    """Minimal TTS speaker using Inworld (voice Ashley)."""
 
-    - Worker thread consumes a queue of text to speak.
-    - Inworld backend: sends text to an HTTP endpoint (config via env), returns WAV bytes.
-    - Local backend: imports a local `speak(text)` function (e.g., tts_voice.speak).
-    - Playback via simpleaudio if available, else falls back to aplay/ffplay.
-    """
-
-    def __init__(self,
-                 enabled: bool,
-                 voice: str = 'default',
-                 backend: str = 'inworld'):
+    def __init__(self, enabled: bool, voice: str = 'Ashley'):
         self.enabled = bool(enabled)
-        self.voice = voice
-        self.backend = (backend or 'inworld').strip().lower()
+        self.voice = voice or 'Ashley'
 
-        # Inworld HTTP settings
-        self.inworld_url = os.environ.get('INWORLD_TTS_URL', '').strip()
+        self.inworld_url = os.environ.get('INWORLD_TTS_URL', 'https://api.inworld.ai/tts/v1/voice:stream').strip()
         self.inworld_api_key = os.environ.get('INWORLD_API_KEY', '').strip()
 
-        # Optional local function
-        self._local_speak: Optional[Callable[[str], None]] = None
-
-        if self.enabled:
-            if self.backend == 'local':
-                mod_path = os.environ.get('BRUNO_AUDIO_LOCAL_MODULE', 'tts_voice.speak')
-                func_name = os.environ.get('BRUNO_AUDIO_LOCAL_FUNC', 'speak')
-                try:
-                    module = __import__(mod_path, fromlist=[func_name])
-                    self._local_speak = getattr(module, func_name)
-                    LOG.info(f'Audio backend: local ({mod_path}.{func_name})')
-                except Exception as e:
-                    LOG.warning(f'Local audio backend import failed ({mod_path}.{func_name}): {e}. Disabling TTS.')
-                    self.enabled = False
-            else:
-                # inworld backend by default
-                if not self.inworld_url:
-                    LOG.warning('INWORLD_TTS_URL not set. Disabling TTS.')
-                    self.enabled = False
+        if self.enabled and not self.inworld_api_key:
+            LOG.warning('INWORLD_API_KEY not set. Disabling TTS.')
+            self.enabled = False
 
         self._q: queue.Queue[str] = queue.Queue()
         self._stop = threading.Event()
@@ -119,13 +95,9 @@ class TTSSpeaker:
             except queue.Empty:
                 continue
             try:
-                if self.backend == 'local' and self._local_speak is not None:
-                    # Delegate playback to local function
-                    self._local_speak(text)
-                else:
-                    audio = self._synthesize_tts(text)
-                    if audio:
-                        self._play_audio(audio)
+                audio = self._synthesize_tts(text)
+                if audio:
+                    self._play_audio(audio)
             except Exception as e:
                 LOG.warning(f'TTS playback failed: {e}')
             finally:
@@ -133,68 +105,67 @@ class TTSSpeaker:
         LOG.info('🔇 TTS worker stopped')
 
     def _synthesize_tts(self, text: str) -> Optional[bytes]:
-        """Call Inworld TTS HTTP endpoint and return audio bytes.
-
-        Tunable via env to match the public API:
-        - INWORLD_TTS_URL (required)
-        - INWORLD_API_KEY (required for auth)
-        - INWORLD_AUTH_HEADER_NAME (default Authorization)
-        - INWORLD_AUTH_SCHEME (default Basic; set to Bearer if needed)
-        - INWORLD_TTS_BODY_STYLE (json_simple|json_input|plain; default json_simple)
-        - INWORLD_ACCEPT (default audio/wav)
-        - INWORLD_TTS_JSON_B64_FIELD (decode base64 if response JSON; default audio)
-        """
-        if not self.inworld_url:
+        """Simple Inworld TTS: Ashley voice, fixed payload, stream chunks, return WAV bytes."""
+        if not self.inworld_api_key or requests is None:
             return None
+        url = self.inworld_url or 'https://api.inworld.ai/tts/v1/voice:stream'
         headers = {
-            'Accept': os.environ.get('INWORLD_ACCEPT', 'audio/wav'),
+            'Authorization': f'Basic {self.inworld_api_key}',
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
         }
-        # Auth header
-        if self.inworld_api_key:
-            header_name = os.environ.get('INWORLD_AUTH_HEADER_NAME', 'Authorization')
-            auth_scheme = os.environ.get('INWORLD_AUTH_SCHEME', 'Basic')
-            raw_flag = os.environ.get('INWORLD_AUTH_RAW', '').strip().lower() in ('1','true','yes','on')
-            key = self.inworld_api_key.strip()
-            # If the key already includes a scheme (e.g., "Basic abcd..."), honor it as-is
-            lower = key.lower()
-            if raw_flag or lower.startswith('basic ') or lower.startswith('bearer ') or lower.startswith('apikey ') or lower.startswith('token '):
-                headers[header_name] = key
-            else:
-                headers[header_name] = f'{auth_scheme} {key}' if auth_scheme else key
-
-        body_style = os.environ.get('INWORLD_TTS_BODY_STYLE', 'json_simple').strip().lower()
-        url = self.inworld_url
-        json_payload = None
-        data = None
-        if body_style == 'plain':
-            headers['Content-Type'] = 'text/plain; charset=utf-8'
-            data = text.encode('utf-8')
-        elif body_style == 'json_input':
-            headers['Content-Type'] = 'application/json'
-            json_payload = {'input': {'text': text}, 'voice': self.voice}
-        else:
-            headers['Content-Type'] = 'application/json'
-            json_payload = {'text': text, 'voice': self.voice}
-
+        payload = {
+            'text': text,
+            'voiceId': 'Ashley',
+            'modelId': 'inworld-tts-1',
+            'audio_config': {
+                'audio_encoding': 'LINEAR16',
+                'sample_rate_hertz': 48000,
+            }
+        }
         try:
-            r = requests.post(url, json=json_payload, data=data, headers=headers, timeout=60)
-            if not r.ok:
-                LOG.warning(f'Inworld TTS HTTP {r.status_code}: {r.text[:200]}')
-                r.raise_for_status()
-            ctype = r.headers.get('Content-Type', '')
-            if 'audio' in ctype:
-                return r.content
-            # try base64 JSON
-            try:
-                field = os.environ.get('INWORLD_TTS_JSON_B64_FIELD', 'audio')
-                j = r.json()
-                import base64
-                b64 = j.get(field)
-                if isinstance(b64, str) and b64:
-                    return base64.b64decode(b64)
-            except Exception:
-                pass
-            return r.content
+            r = requests.post(url, json=payload, headers=headers, stream=True, timeout=60)
+            r.raise_for_status()
+            raw_pcm = io.BytesIO()
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                try:
+                    # Lines may be prefixed with 'data:' (SSE)
+                    if isinstance(line, bytes):
+                        s = line.decode('utf-8', errors='ignore').strip()
+                    else:
+                        s = str(line).strip()
+                    if not s:
+                        continue
+                    if s.startswith('data:'):
+                        s = s[len('data:'):].strip()
+                    if not s or s[0] != '{':
+                        continue
+                    chunk = json.loads(s)
+                    audio_b64 = (
+                        (chunk.get('result') or {}).get('audioContent')
+                        or chunk.get('audioContent')
+                        or (chunk.get('tts') or {}).get('audioContent')
+                    )
+                    if not audio_b64:
+                        continue
+                    audio_bytes = base64.b64decode(audio_b64)
+                    # Many chunks are small WAVs; strip header if present
+                    raw_pcm.write(audio_bytes[44:] if len(audio_bytes) > 44 else audio_bytes)
+                except Exception:
+                    continue
+            pcm = raw_pcm.getvalue()
+            if not pcm:
+                LOG.warning('Inworld TTS produced no audio')
+                return None
+            buf = io.BytesIO()
+            with wave.open(buf, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(48000)
+                wf.writeframes(pcm)
+            return buf.getvalue()
         except Exception as e:
             LOG.warning(f'Inworld TTS request failed: {e}')
             return None
