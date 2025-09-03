@@ -54,7 +54,7 @@ def get_caption(image_path: str, prompt: Optional[str] = None) -> str:
             {'role': 'system', 'content': 'You are a precise visual describer.'},
             {'role': 'user', 'content': [
                 {'type': 'text', 'text': user_prompt},
-                {'type': 'input_image', 'image_url': {'url': data_url}},
+                {'type': 'image_url', 'image_url': {'url': data_url}},
             ]}
         ],
         'temperature': 0.2,
