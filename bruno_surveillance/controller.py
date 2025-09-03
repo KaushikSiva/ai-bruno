@@ -149,11 +149,7 @@ class BrunoController:
 
         cap_text = caption_image(str(img_path))
         LOG.info(f'📝 Caption: {cap_text}')
-        try:
-            if self.speaker:
-                self.speaker.say(cap_text)
-        except Exception:
-            pass
+        # Do not speak during captions
         ts = time.strftime('%H:%M:%S')
         paths.safe_write_text(paths.sidecar_txt_path(img_path), cap_text + '\n')
         self.captions.append({'timestamp': ts, 'path': str(img_path), 'caption': cap_text})
