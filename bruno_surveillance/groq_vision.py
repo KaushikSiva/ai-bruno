@@ -9,7 +9,7 @@ from utils import LOG
 # Environment
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
 GROQ_API_BASE = os.environ.get('GROQ_API_BASE', 'https://api.groq.com/openai/v1').rstrip('/')
-GROQ_VISION_MODEL = os.environ.get('GROQ_VISION_MODEL', 'llama-4-maverick-17b-128e-instruct')
+GROQ_VISION_MODEL = os.environ.get('GROQ_VISION_MODEL', 'meta-llama/llama-4-maverick-17b-128e-instruct')
 
 
 def _file_to_data_url(path: str) -> Optional[str]:
