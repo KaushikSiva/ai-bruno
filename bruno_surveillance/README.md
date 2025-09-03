@@ -30,9 +30,21 @@ BRUNO_SPEED=40
 BRUNO_TURN_SPEED=40
 BRUNO_TURN_TIME=0.5
 BRUNO_BACKUP_TIME=0.0
+
+# Audio (optional; off by default). Also supports CLI flags --audio / --talk
+BRUNO_AUDIO_ENABLED=false
+BRUNO_AUDIO_VOICE=alloy
 ```
 
 ## Notes
 - `captioner.py` is a minimal stub that tries HF `transformers` if present. Replace it with your existing local captioner for best results.
 - Hiwonder SDK modules (e.g., `common.sonar`, `common.mecanum`) come from your robot image under `/home/pi/MasterPi`.
 - The optional `vision_obstacles.py` helper is not wired by default; integrate where desired in `app.py`.
+
+## Audio TTS (optional)
+- When enabled (via `.env BRUNO_AUDIO_ENABLED=1` or `--audio`/`--talk`), Bruno speaks on a background thread:
+  - On start: "Hey, I'm Bruno"
+  - Every snapshot caption
+  - Final LM Studio summary
+- Uses OpenAI TTS (model `gpt-4o-mini-tts`, voice `alloy`) and requires `OPENAI_API_KEY`.
+- Playback uses `simpleaudio` if available, or falls back to `aplay`/`ffplay`.

@@ -3,6 +3,8 @@ Pillow
 requests
 numpy
 pandas
+# Audio playback (optional but recommended for TTS)
+simpleaudio
 # Optional for captioner stub:
 # transformers
 # torch
