@@ -175,6 +175,11 @@ class BrunoController:
         self.shutdown()
         sys.exit(0)
 
+    def _maybe_finish_with_summary(self):
+        """If the summary window has elapsed, produce summary and exit."""
+        if time.time() >= self.summary_due_at:
+            self._finish_with_summary_and_exit('time window reached')
+
     # ----- Small utilities -----
     def _log_startup(self):
         LOG.info('🤖 Bruno Dual-Mode Surveillance (local captioner → LM Studio summary)')
