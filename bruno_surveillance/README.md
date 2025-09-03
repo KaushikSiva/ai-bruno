@@ -1,15 +1,19 @@
-# Bruno External Camera Surveillance (Refactor)
+# Bruno Dual-Mode Surveillance
 
-Multi‑file refactor of the external camera → local captioner → LM Studio summary pipeline with ultrasonic safety and emergency logic.
+Switch between **builtin** and **external** camera without changing code.
 
-## Quick start
-
+## Run
 ```bash
-cd bruno_surveillance
+cd bruno_dual_surveillance
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+# Using env
+export CAM_MODE=builtin   # or external
 python app.py
-```
+
+# Or CLI
+python app.py --mode external
 
 ## Environment variables (`.env`)
 
@@ -48,3 +52,12 @@ BRUNO_AUDIO_VOICE=alloy
   - Final LM Studio summary
 - Uses OpenAI TTS (model `gpt-4o-mini-tts`, voice `alloy`) and requires `OPENAI_API_KEY`.
 - Playback uses `simpleaudio` if available, or falls back to `aplay`/`ffplay`.
+
+Env:
+- `CAM_MODE` = builtin | external
+- `PHOTO_INTERVAL_SEC` (default 15)
+- `SUMMARY_DELAY_SEC` (default 120)
+- `LLM_API_BASE` (default http://localhost:1234/v1)
+- `LLM_MODEL` (default lmstudio)
+- `LLM_ENDPOINT` = chat | completions (default chat)
+- Builtin camera only: `BRUNO_CAMERA_URL` (default http://127.0.0.1:8080?action=stream)

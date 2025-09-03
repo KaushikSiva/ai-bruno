@@ -7,6 +7,10 @@ Bruno External Camera Surveillance (Local Captioner + LM Studio Summary)
   to a local GPT-OSS server (LM Studio, OpenAI-compatible) for summary
 - Prints the summary to console and exits cleanly
 - Logs to STDOUT + ./logs/bruno.log (rotating), auto-creates ./gpt_images, ./logs, ./debug
+
+Enhancements:
+- If EMERGENCY STOP persists >5s: reverse one step (once)
+- If EMERGENCY STOP persists >10s: send summary to LM Studio and exit
 """
 
 import os, sys, time, signal, logging, subprocess, requests
@@ -299,13 +303,8 @@ class Snapshotter:
 
 # ---------- LM Studio (OpenAI-compatible) summary ----------
 def summarize_captions_lmstudio(captions: List[Dict]) -> str:
-    """
-    Send captions to a local OpenAI-compatible server (LM Studio) and return a summary.
-    Each caption dict: {'timestamp': 'HH:MM:SS', 'path': '/abs/...jpg', 'caption': '...'}
-    """
     if not captions:
         return "No captions were captured in the time window."
-
     bullet_lines = [f"- [{c['timestamp']}] {c['caption']}" for c in captions]
     user_text = (
         "You are a concise surveillance summarizer.\n"
@@ -313,7 +312,6 @@ def summarize_captions_lmstudio(captions: List[Dict]) -> str:
         "summarize the scene: key objects, activities, potential hazards, and overall context in 3–6 bullet points.\n\n"
         "CAPTIONS:\n" + "\n".join(bullet_lines)
     )
-
     payload = {
         "model": LLM_MODEL,
         "messages": [
@@ -323,13 +321,11 @@ def summarize_captions_lmstudio(captions: List[Dict]) -> str:
         "temperature": 0.2,
         "max_tokens": 400
     }
-
     url = LLM_API_BASE.rstrip("/") + "/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'lm-studio')}"
     }
-
     try:
         r = requests.post(url, json=payload, headers=headers, timeout=LLM_TIMEOUT)
         r.raise_for_status()
@@ -358,6 +354,10 @@ class BrunoExternalCameraSurveillance:
         self.summary_due_at = self.start_time + SUMMARY_DELAY
         self.captions: List[Dict] = []
 
+        # Emergency tracking
+        self.emergency_start_time: Optional[float] = None
+        self.emergency_reversed_once: bool = False
+
     def _open_camera(self) -> bool:
         LOG.info("🎥 Opening external camera...")
         for attempt in range(self.cfg["camera_retry_attempts"]):
@@ -379,7 +379,6 @@ class BrunoExternalCameraSurveillance:
             pass
 
     def _do_snapshot_and_caption(self, frame) -> None:
-        """Save a snapshot and caption it with captioner.get_caption; store result."""
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)
         img_path = save_image_path("external_camera_photo")
@@ -400,19 +399,19 @@ class BrunoExternalCameraSurveillance:
 
         self.captions.append({"timestamp": ts, "path": str(img_path), "caption": cap_text})
 
-    def _maybe_finish_with_summary(self):
-        """If 2 minutes have elapsed, send captions to LM Studio, print summary, and exit."""
-        if time.time() >= self.summary_due_at:
-            LOG.info("⏱️  Summary window reached — generating summary via LM Studio…")
-            summary = summarize_captions_lmstudio(self.captions)
-            print("\n" + "=" * 80)
-            print("🧾 SUMMARY (LM Studio):")
-            print(summary)
-            print("=" * 80 + "\n")
+    def _finish_with_summary_and_exit(self, reason: str):
+        LOG.warning(f"⏹️  Triggering early summary due to: {reason}")
+        summary = summarize_captions_lmstudio(self.captions)
+        print("\n" + "=" * 80)
+        print("🧾 SUMMARY (LM Studio):")
+        print(summary)
+        print("=" * 80 + "\n")
+        self.shutdown()
+        sys.exit(0)
 
-            # Clean exit
-            self.shutdown()
-            sys.exit(0)
+    def _maybe_finish_with_summary(self):
+        if time.time() >= self.summary_due_at:
+            self._finish_with_summary_and_exit("time window reached")
 
     def run(self):
         LOG.info("🤖 Bruno External Camera Surveillance (local captioner → LM Studio summary)")
@@ -465,7 +464,7 @@ class BrunoExternalCameraSurveillance:
                         use_frame = fresh if fresh is not None else last_good_frame
                         self._do_snapshot_and_caption(use_frame)
 
-                        # ✅ Resume forward if ultrasonic is currently safe (or unknown)
+                        # Resume forward if ultrasonic is currently safe (or unknown)
                         if last_distance_cm is None or last_distance_cm > self.cfg["ultra_caution_cm"]:
                             self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
 
@@ -473,39 +472,78 @@ class BrunoExternalCameraSurveillance:
                     else:
                         LOG.warning("⚠️  Snapshot due, but no frame available yet (skipping).")
 
-                # 3) Ultrasonic avoidance
+                # 3) Ultrasonic avoidance + EMERGENCY persistence logic
                 d_cm = self.ultra.get_distance_cm()
-                last_distance_cm = d_cm  # <-- track latest distance for resume logic
+                last_distance_cm = d_cm
 
                 if d_cm is not None and d_cm <= self.cfg["ultra_danger_cm"]:
+                    # Entering or staying in EMERGENCY
+                    if self.emergency_start_time is None:
+                        self.emergency_start_time = time.time()
+                        self.emergency_reversed_once = False
+                        LOG.warning(f"EMERGENCY STOP ({d_cm:.1f} cm) — timer started")
+                    else:
+                        LOG.warning(f"EMERGENCY STOP ({d_cm:.1f} cm) — ongoing")
+
                     self.ultra.set_rgb(255, 0, 0)
                     self.stop_all()
-                    LOG.warning(f"EMERGENCY STOP ({d_cm:.1f} cm)")
-                    time.sleep(0.05)
-                    # continue; summary check still happens below
+                    time.sleep(0.02)
 
+                    elapsed = time.time() - self.emergency_start_time
+
+                    # After 5s stuck: reverse one step (only once)
+                    if (elapsed >= 5.0) and (not self.emergency_reversed_once):
+                        LOG.warning("⏪ EMERGENCY >5s — reversing one step")
+                        try:
+                            # Reverse burst (~0.6s). If negative speed isn't supported, reduce speed or tweak duration.
+                            self.car.set_velocity(-self.cfg["forward_speed"], 90, 0)
+                            time.sleep(0.6)
+                        except Exception:
+                            pass
+                        finally:
+                            self.stop_all()
+                            self.emergency_reversed_once = True
+
+                    # After 10s stuck: send summary and exit
+                    if elapsed >= 30.0:
+                        self._finish_with_summary_and_exit("prolonged emergency stop (>10s)")
+
+                    # Skip the rest of loop; still check time-based summary below
                 elif d_cm is not None and d_cm <= self.cfg["ultra_caution_cm"]:
+                    # Caution: avoidance
                     self.ultra.set_rgb(255, 180, 0)
+
+                    # Reset emergency timer since not in danger anymore
+                    if self.emergency_start_time is not None:
+                        LOG.info("✅ Left EMERGENCY zone — timer reset")
+                    self.emergency_start_time = None
+                    self.emergency_reversed_once = False
+
                     if self.cfg["backup_time"] > 0:
                         self.car.set_velocity(self.cfg["turn_speed"], 90, 0)
                         time.sleep(self.cfg["backup_time"])
                         self.stop_all()
+
                     left = ((self.frame_idx // 60) % 2 == 0)
                     self.car.set_velocity(0, 90, -0.5 if left else 0.5)
                     time.sleep(self.cfg["turn_time"])
                     self.stop_all()
                     LOG.info(f"ULTRA AVOID ({d_cm:.1f} cm) {'LEFT' if left else 'RIGHT'}")
-                    # continue; summary check still happens below
                 else:
-                    # ✅ SAFE → drive forward
+                    # Safe: drive forward
                     self.ultra.set_rgb(0, 255, 0)
+
+                    # Reset emergency state if we were in it
+                    if self.emergency_start_time is not None:
+                        LOG.info("✅ Safe distance — emergency cleared")
+                    self.emergency_start_time = None
+                    self.emergency_reversed_once = False
+
                     self.car.set_velocity(self.cfg["forward_speed"], 90, 0)
 
-                # 4) (Optional) Vision avoidance — keep simple or extend as needed
-                # If you want to re-enable full vision avoidance, insert it here and
-                # only override motion when an obstacle is detected.
+                # 4) (Optional) Vision avoidance could go here
 
-                # 5) Maybe finish with summary at the 2-minute mark
+                # 5) Maybe finish with summary at the scheduled window
                 self._maybe_finish_with_summary()
 
                 time.sleep(0.03)
