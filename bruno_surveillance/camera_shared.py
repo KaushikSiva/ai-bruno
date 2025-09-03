@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 from utils import LOG
 from camera_builtin import BuiltinCamera
 from camera_external import ExternalCamera
@@ -19,3 +19,21 @@ def make_camera(mode: str, retry_attempts: int, retry_delay: float):
     LOG.info('📷 Using ExternalCamera strategy')
     return ExternalCamera(retry_attempts=retry_attempts, retry_delay=retry_delay)
 
+
+def read_or_reconnect(camera, last_good_frame: Optional[object]) -> Optional[object]:
+    """
+    Attempt a camera read; if it fails, reopen the camera and return the
+    previous last_good_frame. On success, returns the new frame.
+    """
+    try:
+        ok, frame = camera.read()
+    except Exception:
+        ok, frame = False, None
+    if ok and frame is not None:
+        return frame
+    LOG.warning('📹 Camera read failed; attempting reconnection...')
+    try:
+        camera.reopen()
+    except Exception:
+        pass
+    return last_good_frame

@@ -22,7 +22,7 @@ from lmstudio_client import summarize_captions_lmstudio
 from audio_tts import TTSSpeaker
 from robot_motion import MecanumWrapper
 from ultrasonic import UltrasonicRGB
-from camera_shared import make_camera
+from camera_shared import make_camera, read_or_reconnect
 
 try:
     import cv2
@@ -101,13 +101,10 @@ class BrunoController:
             while True:
                 self.frame_idx += 1
 
-                ok, frame = self.camera.read()
-                if ok and frame is not None:
-                    last_good_frame = frame
-                else:
-                    LOG.warning('📹 Camera read failed; attempting reconnection...')
-                    self.camera.reopen()
+                # 1) Read a frame (with automatic reconnect on failure)
+                last_good_frame = read_or_reconnect(self.camera, last_good_frame)
 
+                # 2) Snapshot cadence (camera-agnostic)
                 if self.snapshotter.due():
                     if last_good_frame is not None:
                         self._take_and_caption(last_good_frame)
@@ -190,6 +187,8 @@ class BrunoController:
                 self.speaker.say("Hey, I'm Bruno")
         except Exception:
             pass
+
+    # (camera read helper moved to camera_shared.read_or_reconnect)
 
 
 # ----- Entrypoint used by app.py -----
