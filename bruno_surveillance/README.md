@@ -4,7 +4,7 @@ Switch between **builtin** and **external** camera without changing code.
 
 ## Run
 ```bash
-cd bruno_dual_surveillance
+cd bruno_surveillance
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -14,6 +14,7 @@ python app.py
 
 # Or CLI
 python app.py --mode external
+```
 
 ## Environment variables (`.env`)
 
@@ -41,9 +42,10 @@ BRUNO_AUDIO_VOICE=alloy
 ```
 
 ## Notes
+- app.py is a minimal entrypoint; the main loop lives in `controller.py`.
+- Cameras are modular: `camera_shared.py` chooses `camera_builtin.py` or `camera_external.py`.
 - `captioner.py` is a minimal stub that tries HF `transformers` if present. Replace it with your existing local captioner for best results.
 - Hiwonder SDK modules (e.g., `common.sonar`, `common.mecanum`) come from your robot image under `/home/pi/MasterPi`.
-- The optional `vision_obstacles.py` helper is not wired by default; integrate where desired in `app.py`.
 
 ## Audio TTS (optional)
 - When enabled (via `.env BRUNO_AUDIO_ENABLED=1` or `--audio`/`--talk`), Bruno speaks on a background thread:
@@ -59,5 +61,4 @@ Env:
 - `SUMMARY_DELAY_SEC` (default 120)
 - `LLM_API_BASE` (default http://localhost:1234/v1)
 - `LLM_MODEL` (default lmstudio)
-- `LLM_ENDPOINT` = chat | completions (default chat)
 - Builtin camera only: `BRUNO_CAMERA_URL` (default http://127.0.0.1:8080?action=stream)
