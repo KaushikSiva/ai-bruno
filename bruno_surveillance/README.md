@@ -38,10 +38,14 @@ BRUNO_BACKUP_TIME=0.0
 
 # Audio (optional; off by default). Also supports CLI flags --audio / --talk
 BRUNO_AUDIO_ENABLED=false
-BRUNO_AUDIO_VOICE=alloy
-BRUNO_AUDIO_BACKEND=openai    # or local (uses tts_voice.speak)
+BRUNO_AUDIO_VOICE=default
+BRUNO_AUDIO_BACKEND=inworld   # or local (uses tts_voice.speak)
 BRUNO_AUDIO_LOCAL_MODULE=tts_voice.speak
 BRUNO_AUDIO_LOCAL_FUNC=speak
+
+# Inworld TTS endpoint (used when BRUNO_AUDIO_BACKEND=inworld)
+INWORLD_TTS_URL=              # e.g., https://your-inworld-host/tts
+INWORLD_API_KEY=              # optional; sent as Bearer token
 
 # Caption backend (local HF or Groq Vision)
 CAPTION_BACKEND=local        # or groq
@@ -68,9 +72,9 @@ GROQ_API_BASE=https://api.groq.com/openai/v1
   - On start: "Hey, I'm Bruno"
   - Every snapshot caption
   - Final LM Studio summary
-- Uses OpenAI TTS (model `gpt-4o-mini-tts`, voice `alloy`) and requires `OPENAI_API_KEY`.
+- Uses Inworld TTS via a simple HTTP endpoint you configure (set `INWORLD_TTS_URL`, optional `INWORLD_API_KEY`).
 - Playback uses `simpleaudio` if available, or falls back to `aplay`/`ffplay`.
- - To use your local TTS (`tts_voice/speak.py`): set `--audio-backend local` (or `BRUNO_AUDIO_BACKEND=local`).
+- To use your local TTS (`tts_voice/speak.py`): set `--audio-backend local` (or `BRUNO_AUDIO_BACKEND=local`).
    - By default, it imports `tts_voice.speak` and calls the `speak(text)` function.
    - Override module/function via `BRUNO_AUDIO_LOCAL_MODULE` and `BRUNO_AUDIO_LOCAL_FUNC` if needed.
 

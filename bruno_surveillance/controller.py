@@ -34,7 +34,7 @@ except Exception as e:
 class BrunoController:
     """Main runtime: camera → snapshot/caption → safety → summary."""
 
-    def __init__(self, mode: str, audio_enabled: bool = False, audio_voice: str = 'alloy', audio_backend: str = 'openai'):
+    def __init__(self, mode: str, audio_enabled: bool = False, audio_voice: str = 'default', audio_backend: str = 'inworld'):
         self.cfg: Settings = load_settings()
         self.mode = mode
 

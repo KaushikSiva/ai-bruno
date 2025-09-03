@@ -9,43 +9,36 @@ from typing import Optional, Callable
 
 import requests
 
-from utils import LOG, get_env_str
+from utils import LOG
 
 
 class TTSSpeaker:
     """
-    Background TTS speaker using OpenAI's Audio Speech API.
+    Background TTS speaker (Inworld or local backend).
 
-    - Start a worker thread that consumes a queue of text to speak.
-    - Uses OpenAI TTS (gpt-4o-mini-tts) to get WAV bytes.
-    - Playback via simpleaudio if available, else falls back to system players (aplay/ffplay).
-
-    This class is self-contained and optional. If API key is missing or any
-    dependency fails, it degrades gracefully and logs warnings.
+    - Worker thread consumes a queue of text to speak.
+    - Inworld backend: sends text to an HTTP endpoint (config via env), returns WAV bytes.
+    - Local backend: imports a local `speak(text)` function (e.g., tts_voice.speak).
+    - Playback via simpleaudio if available, else falls back to aplay/ffplay.
     """
 
     def __init__(self,
                  enabled: bool,
-                 voice: str = 'alloy',
-                 model: str = 'gpt-4o-mini-tts',
-                 api_base: str = 'https://api.openai.com/v1',
-                 backend: str = 'openai'):
+                 voice: str = 'default',
+                 backend: str = 'inworld'):
         self.enabled = bool(enabled)
         self.voice = voice
-        self.model = model
-        self.api_base = api_base.rstrip('/')
-        self.backend = (backend or 'openai').strip().lower()
+        self.backend = (backend or 'inworld').strip().lower()
 
-        self.api_key = os.environ.get('OPENAI_API_KEY')
+        # Inworld HTTP settings
+        self.inworld_url = os.environ.get('INWORLD_TTS_URL', '').strip()
+        self.inworld_api_key = os.environ.get('INWORLD_API_KEY', '').strip()
+
+        # Optional local function
         self._local_speak: Optional[Callable[[str], None]] = None
 
         if self.enabled:
-            if self.backend == 'openai':
-                if not self.api_key:
-                    LOG.warning('Audio backend openai selected, but OPENAI_API_KEY is missing. Disabling TTS.')
-                    self.enabled = False
-            elif self.backend == 'local':
-                # Try to import a local speak function: module and func can be overridden via env
+            if self.backend == 'local':
                 mod_path = os.environ.get('BRUNO_AUDIO_LOCAL_MODULE', 'tts_voice.speak')
                 func_name = os.environ.get('BRUNO_AUDIO_LOCAL_FUNC', 'speak')
                 try:
@@ -53,10 +46,13 @@ class TTSSpeaker:
                     self._local_speak = getattr(module, func_name)
                     LOG.info(f'Audio backend: local ({mod_path}.{func_name})')
                 except Exception as e:
-                    LOG.warning(f'Local audio backend import failed ({mod_path}.{func_name}): {e}. Falling back to openai.')
-                    self.backend = 'openai'
-                    if not self.api_key:
-                        self.enabled = False
+                    LOG.warning(f'Local audio backend import failed ({mod_path}.{func_name}): {e}. Disabling TTS.')
+                    self.enabled = False
+            else:
+                # inworld backend by default
+                if not self.inworld_url:
+                    LOG.warning('INWORLD_TTS_URL not set. Disabling TTS.')
+                    self.enabled = False
 
         self._q: queue.Queue[str] = queue.Queue()
         self._stop = threading.Event()
@@ -137,23 +133,26 @@ class TTSSpeaker:
         LOG.info('🔇 TTS worker stopped')
 
     def _synthesize_tts(self, text: str) -> Optional[bytes]:
-        url = f'{self.api_base}/audio/speech'
-        headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json',
-        }
-        payload = {
-            'model': self.model,
-            'input': text,
-            'voice': self.voice,
-            'response_format': 'wav',
-        }
+        """Call Inworld TTS HTTP endpoint and return WAV bytes.
+
+        Expected env/config:
+        - INWORLD_TTS_URL: full URL to a TTS endpoint that accepts JSON {"text", "voice"}
+          and returns audio/wav bytes. Authorization header (Bearer) optional.
+        - INWORLD_API_KEY: if set, sent as Bearer token.
+        """
+        if not self.inworld_url:
+            return None
+        headers = {'Content-Type': 'application/json'}
+        if self.inworld_api_key:
+            headers['Authorization'] = f'Bearer {self.inworld_api_key}'
+        payload = {'text': text, 'voice': self.voice}
         try:
-            r = requests.post(url, json=payload, headers=headers, timeout=60)
+            r = requests.post(self.inworld_url, json=payload, headers=headers, timeout=60)
             r.raise_for_status()
-            return r.content  # WAV bytes
+            # Prefer binary content; if JSON with base64 provided, user can adapt endpoint or extend here.
+            return r.content
         except Exception as e:
-            LOG.warning(f'OpenAI TTS request failed: {e}')
+            LOG.warning(f'Inworld TTS request failed: {e}')
             return None
 
     def _play_audio(self, wav_bytes: bytes):
