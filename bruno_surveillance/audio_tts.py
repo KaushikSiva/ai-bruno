@@ -133,23 +133,67 @@ class TTSSpeaker:
         LOG.info('🔇 TTS worker stopped')
 
     def _synthesize_tts(self, text: str) -> Optional[bytes]:
-        """Call Inworld TTS HTTP endpoint and return WAV bytes.
+        """Call Inworld TTS HTTP endpoint and return audio bytes.
 
-        Expected env/config:
-        - INWORLD_TTS_URL: full URL to a TTS endpoint that accepts JSON {"text", "voice"}
-          and returns audio/wav bytes. Authorization header (Bearer) optional.
-        - INWORLD_API_KEY: if set, sent as Bearer token.
+        Tunable via env to match the public API:
+        - INWORLD_TTS_URL (required)
+        - INWORLD_API_KEY (required for auth)
+        - INWORLD_AUTH_HEADER_NAME (default Authorization)
+        - INWORLD_AUTH_SCHEME (default Basic; set to Bearer if needed)
+        - INWORLD_TTS_BODY_STYLE (json_simple|json_input|plain; default json_simple)
+        - INWORLD_ACCEPT (default audio/wav)
+        - INWORLD_TTS_JSON_B64_FIELD (decode base64 if response JSON; default audio)
         """
         if not self.inworld_url:
             return None
-        headers = {'Content-Type': 'application/json'}
+        headers = {
+            'Accept': os.environ.get('INWORLD_ACCEPT', 'audio/wav'),
+        }
+        # Auth header
         if self.inworld_api_key:
-            headers['Authorization'] = f'Bearer {self.inworld_api_key}'
-        payload = {'text': text, 'voice': self.voice}
+            header_name = os.environ.get('INWORLD_AUTH_HEADER_NAME', 'Authorization')
+            auth_scheme = os.environ.get('INWORLD_AUTH_SCHEME', 'Basic')
+            raw_flag = os.environ.get('INWORLD_AUTH_RAW', '').strip().lower() in ('1','true','yes','on')
+            key = self.inworld_api_key.strip()
+            # If the key already includes a scheme (e.g., "Basic abcd..."), honor it as-is
+            lower = key.lower()
+            if raw_flag or lower.startswith('basic ') or lower.startswith('bearer ') or lower.startswith('apikey ') or lower.startswith('token '):
+                headers[header_name] = key
+            else:
+                headers[header_name] = f'{auth_scheme} {key}' if auth_scheme else key
+
+        body_style = os.environ.get('INWORLD_TTS_BODY_STYLE', 'json_simple').strip().lower()
+        url = self.inworld_url
+        json_payload = None
+        data = None
+        if body_style == 'plain':
+            headers['Content-Type'] = 'text/plain; charset=utf-8'
+            data = text.encode('utf-8')
+        elif body_style == 'json_input':
+            headers['Content-Type'] = 'application/json'
+            json_payload = {'input': {'text': text}, 'voice': self.voice}
+        else:
+            headers['Content-Type'] = 'application/json'
+            json_payload = {'text': text, 'voice': self.voice}
+
         try:
-            r = requests.post(self.inworld_url, json=payload, headers=headers, timeout=60)
-            r.raise_for_status()
-            # Prefer binary content; if JSON with base64 provided, user can adapt endpoint or extend here.
+            r = requests.post(url, json=json_payload, data=data, headers=headers, timeout=60)
+            if not r.ok:
+                LOG.warning(f'Inworld TTS HTTP {r.status_code}: {r.text[:200]}')
+                r.raise_for_status()
+            ctype = r.headers.get('Content-Type', '')
+            if 'audio' in ctype:
+                return r.content
+            # try base64 JSON
+            try:
+                field = os.environ.get('INWORLD_TTS_JSON_B64_FIELD', 'audio')
+                j = r.json()
+                import base64
+                b64 = j.get(field)
+                if isinstance(b64, str) and b64:
+                    return base64.b64decode(b64)
+            except Exception:
+                pass
             return r.content
         except Exception as e:
             LOG.warning(f'Inworld TTS request failed: {e}')
