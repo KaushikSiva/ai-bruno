@@ -17,7 +17,7 @@ def set_backend(name: str = 'local') -> None:
     if name == 'groq':
         _local = None
         try:
-            from . import groq_vision as _g
+            import groq_vision as _g
             _groq = _g
             LOG.info('Caption backend: Groq Vision')
         except Exception as _e:
