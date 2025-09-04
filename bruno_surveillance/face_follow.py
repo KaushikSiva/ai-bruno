@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # coding: utf-8
 """
-Bruno Face Follow (standalone)
+Bruno Leg Follow (standalone)
 
 Behavior
 - Opens camera (builtin/external via --mode)
-- Detects faces (MediaPipe)
-- On first detection after a gap: nod head and say "Hello" (voice)
-- Follows the person by keeping the face centered and at a target size
+- Detects a person via MediaPipe Pose and tracks lower body (legs/hips)
+- Greets once (Groq Vision caption or first pose) with nod + "Hello"
+- Follows from behind by centering on legs and maintaining distance
 - Uses ultrasonic to avoid getting too close
 
 Run
@@ -16,6 +16,7 @@ Run
 Dependencies
 - mediapipe, opencv-python
 - MasterPi SDK for motion & ultrasonic
+- bruno_surveillance/groq_vision.py for caption probe
 - bruno_surveillance/audio_tts.py for TTS (Inworld)
 """
 import os
@@ -52,17 +53,21 @@ class FaceFollower:
             self.speaker.start()
 
         self.board = Board() if HW_BOARD else None
-        self.face = mp.solutions.face_detection.FaceDetection(min_detection_confidence=0.75)
+        # Pose for leg/hip landmarks
+        self.pose = mp.solutions.pose.Pose(model_complexity=0,
+                                           min_detection_confidence=0.5,
+                                           min_tracking_confidence=0.5)
         self.greeted_once = False
         self.next_groq_check = 0.0
 
         # Follow tuning
-        # If your chassis turns the opposite way, set invert_yaw = True
-        self.invert_yaw = True  # hardware often maps sign opposite
-        self.center_dead_px = 40
-        self.area_near = 110000   # stop if larger than this (too close)
-        self.area_target = 80000  # try to reach this area
-        self.area_far = 40000     # move forward if below this
+        # If your chassis turns the opposite way, set invert_yaw = False/True
+        self.invert_yaw = True  # many chassis map yaw inverted; flip if needed
+        self.center_dead_px = 50
+        # Area proxy based on lower-body bounding box; tune for your FOV
+        self.area_near = 130000   # stop if larger than this (too close)
+        self.area_target = 90000  # try to reach this area
+        self.area_far = 50000     # move forward if below this
 
         # Timing
         self.loop_sleep = 0.03
@@ -90,13 +95,13 @@ class FaceFollower:
         except Exception:
             pass
 
-    def _follow_step(self, frame_w, frame_h, face_box):
+    def _follow_step(self, frame_w, frame_h, bbox):
         # Safety: ultrasonic
         d = self.ultra.get_distance_cm()
         if d is not None and d <= 25:
             self.motion.stop(); return
 
-        (x, y, w, h) = face_box
+        (x, y, w, h) = bbox
         cx = x + w // 2
         cy = y + h // 2
         area = w * h
@@ -148,6 +153,27 @@ class FaceFollower:
         except Exception:
             return False
 
+    def _lower_body_bbox(self, h, w, lmk) -> tuple | None:
+        """Compute a bbox around hips/knees/ankles from pose landmarks.
+        Returns (x, y, bw, bh) in pixels, or None if invalid.
+        """
+        idx = [23, 24, 25, 26, 27, 28]  # hips, knees, ankles
+        xs, ys = [], []
+        for i in idx:
+            lm = lmk.landmark[i]
+            if lm.visibility < 0.4:
+                continue
+            xs.append(int(lm.x * w)); ys.append(int(lm.y * h))
+        if len(xs) < 2 or len(ys) < 2:
+            return None
+        x1, x2 = max(0, min(xs)), min(w-1, max(xs))
+        y1, y2 = max(0, min(ys)), min(h-1, max(ys))
+        # Ensure bbox has reasonable size (avoid zero-area)
+        bw, bh = max(1, x2 - x1), max(1, y2 - y1)
+        # Focus on lower third: pad upward slightly to include thighs
+        y1 = max(0, y1 - int(0.05 * h))
+        return (x1, y1, bw, bh)
+
     def run(self):
         LOG.info('🤝 Face Follow: greet + nod + follow')
         if not self.camera.open():
@@ -161,7 +187,7 @@ class FaceFollower:
                     time.sleep(self.loop_sleep); continue
                 h, w = last_frame.shape[:2]
                 rgb = cv2.cvtColor(last_frame, cv2.COLOR_BGR2RGB)
-                res = self.face.process(rgb)
+                res = self.pose.process(rgb)
 
                 # Greet once using Groq vision (every few seconds)
                 now = time.time()
@@ -170,19 +196,9 @@ class FaceFollower:
                     if self._groq_person_probe(last_frame):
                         self._greet()
 
-                if res.detections:
-                    # take the best face
-                    det = max(res.detections, key=lambda d: d.score[0] if d.score else 0.0)
-                    score = det.score[0] if det.score else 0.0
-                    if score >= 0.7:
-                        bbox = det.location_data.relative_bounding_box
-                        box = (
-                            int(bbox.xmin * w),
-                            int(bbox.ymin * h),
-                            int(bbox.width * w),
-                            int(bbox.height * h),
-                        )
-                        # If Groq already greeted, do not greet again
+                if res.pose_landmarks:
+                    box = self._lower_body_bbox(h, w, res.pose_landmarks)
+                    if box is not None:
                         if not self.greeted_once:
                             self._greet()
                         self._follow_step(w, h, box)
