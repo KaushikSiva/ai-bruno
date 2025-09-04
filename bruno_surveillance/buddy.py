@@ -61,17 +61,17 @@ def _lmstudio_chat(messages: List[Dict[str, str]],
 
 class STT:
     """Simple speech-to-text facade: tries SpeechRecognition; else falls back to input()."""
-    def __init__(self):
+    def __init__(self, device_index: int | None = None):
         self._recognizer = None
         self._mic = None
         try:
             import speech_recognition as sr  # type: ignore
             self._recognizer = sr.Recognizer()
             try:
-                self._mic = sr.Microphone()
+                self._mic = sr.Microphone(device_index=device_index)
                 with self._mic as source:
                     self._recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                LOG.info('🎙️  Microphone ready (SpeechRecognition)')
+                LOG.info(f'🎙️  Microphone ready (SpeechRecognition, device_index={self._mic.device_index})')
             except Exception as e:
                 LOG.warning(f'No microphone: {e}')
                 self._recognizer = None
@@ -114,7 +114,20 @@ def main():
     p.add_argument('--audio', action='store_true', help='Speak responses with TTS')
     p.add_argument('--voice', default=os.environ.get('BRUNO_AUDIO_VOICE', 'Ashley'))
     p.add_argument('--system', default='You are Bruno, a concise, friendly assistant. Keep replies brief and helpful.')
+    p.add_argument('--mic-index', type=int, default=None, help='SpeechRecognition microphone device index')
+    p.add_argument('--list-mics', action='store_true', help='List available microphones and exit')
     args = p.parse_args()
+
+    if args.list_mics:
+        try:
+            import speech_recognition as sr  # type: ignore
+            names = sr.Microphone.list_microphone_names()
+            print('Available microphones:')
+            for i, name in enumerate(names):
+                print(f'  [{i}] {name}')
+        except Exception as e:
+            print(f'Could not list microphones: {e}')
+        return
 
     tts = TTSSpeaker(enabled=args.audio, voice=args.voice) if args.audio else None
     if tts:
@@ -124,7 +137,7 @@ def main():
             LOG.warning(f'TTS init failed: {e}')
             tts = None
 
-    stt = STT()
+    stt = STT(device_index=args.mic_index)
     if not stt.available:
         LOG.info('Mic unavailable; falling back to keyboard input.')
 
@@ -167,4 +180,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
