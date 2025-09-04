@@ -226,7 +226,7 @@ def main():
     p.add_argument('--mic-index', type=int, default=None, help='SpeechRecognition microphone device index')
     p.add_argument('--list-mics', action='store_true', help='List available microphones and exit')
     p.add_argument('--vosk-model', default=os.environ.get('VOSK_MODEL', None), help='Path to Vosk offline model (fallback)')
-    p.add_argument('--wake', default=None, help='Wake word; only respond when transcript contains this (e.g., "bruno")')
+    p.add_argument('--wake', default=os.environ.get('BUDDY_WAKE', 'hey bruno'), help='Wake phrase; only respond when transcript contains this (default: "hey bruno")')
     args = p.parse_args()
 
     if args.list_mics:
@@ -253,7 +253,8 @@ def main():
         LOG.info('Mic unavailable; falling back to keyboard input.')
 
     messages: List[Dict[str, str]] = [{'role': 'system', 'content': args.system}]
-    print('Buddy ready. Say or type "stop" to end.\n')
+    wake_info = f" Say '{args.wake}' to talk." if args.wake else ''
+    print(f"Buddy ready.{wake_info} Say or type 'stop' to end.\n")
 
     try:
         empty_in_a_row = 0
@@ -279,10 +280,12 @@ def main():
                 low = user_text.lower()
                 wake = args.wake.lower()
                 if wake not in low:
-                    # ignore until wake word detected
+                    # ignore until wake phrase detected
                     continue
-                # Strip wake word once
-                user_text = low.replace(wake, '', 1).strip() or wake
+                # Strip only the first occurrence (keeps rest of content)
+                idx = low.find(wake)
+                user_text = user_text[:idx] + user_text[idx+len(args.wake):]
+                user_text = user_text.strip() or 'hello'
             print(f'You: {user_text}')
             if user_text.strip().lower() in ('stop', 'quit', 'exit'):
                 print('Bye!')
