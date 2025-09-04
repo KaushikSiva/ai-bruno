@@ -74,8 +74,12 @@ class STT:
                     # Conservative audio params to match many USB mics
                     self._mic = sr.Microphone(device_index=device_index, sample_rate=16000, chunk_size=1024)
                 with self._mic as source:
+                    # Tune recognition to be more responsive on Pi/USB mics
                     self._recognizer.dynamic_energy_threshold = True
-                    self._recognizer.adjust_for_ambient_noise(source, duration=0.6)
+                    self._recognizer.energy_threshold = int(os.environ.get('BUDDY_ENERGY_THRESHOLD', '200'))
+                    self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '0.6'))
+                    self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.3'))
+                    self._recognizer.adjust_for_ambient_noise(source, duration=0.8)
                 LOG.info(f'🎙️  Microphone ready (SpeechRecognition, device_index={self._mic.device_index})')
             except Exception as e:
                 LOG.warning(f'No microphone: {e}')
@@ -108,10 +112,13 @@ class STT:
                     text = self._recognizer.recognize_sphinx(audio)
                     return text.strip()
                 except Exception:
+                    print("(didn't catch that)")
                     return ''
         except sr.WaitTimeoutError:
+            print("(timeout)")
             return ''
         except Exception:
+            print("(mic error)")
             return ''
 
 
@@ -171,11 +178,24 @@ def main():
     print('Buddy ready. Say or type "stop" to end.\n')
 
     try:
+        empty_in_a_row = 0
         while True:
             user_text = stt.listen_once()
             if not user_text:
-                # ignore silence/timeouts
+                empty_in_a_row += 1
+                if empty_in_a_row >= 3 and not stt.available:
+                    # Already in text mode; keep looping
+                    continue
+                if empty_in_a_row >= 3 and stt.available:
+                    # Offer quick keyboard fallback after repeated silence
+                    typed = input('You (type, fallback): ').strip()
+                    if typed:
+                        user_text = typed
+                        empty_in_a_row = 0
+                    else:
+                        continue
                 continue
+            empty_in_a_row = 0
             print(f'You: {user_text}')
             if user_text.strip().lower() in ('stop', 'quit', 'exit'):
                 print('Bye!')
