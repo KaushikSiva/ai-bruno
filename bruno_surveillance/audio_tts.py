@@ -99,9 +99,34 @@ class TTSSpeaker:
         self.inworld_url = os.environ.get('INWORLD_TTS_URL', 'https://api.inworld.ai/tts/v1/voice:stream').strip()
         self.inworld_api_key = os.environ.get('INWORLD_API_KEY', '').strip()
 
+        # Check for fallback TTS options if Inworld API key not available
+        self.use_fallback_tts = False
+        self.fallback_tts_cmd = None
+        
         if self.enabled and not self.inworld_api_key:
-            LOG.warning('INWORLD_API_KEY not set. Disabling TTS.')
-            self.enabled = False
+            # Try to find system TTS as fallback
+            fallback_options = [
+                ['espeak', '-s', '150'],  # eSpeak with moderate speed
+                ['espeak-ng', '-s', '150'],
+                ['festival', '--tts'],
+                ['pico2wave', '-l', 'en-US', '-w', '/dev/stdout'],
+                ['flite']
+            ]
+            
+            for cmd in fallback_options:
+                try:
+                    result = subprocess.run([cmd[0], '--version'], capture_output=True, timeout=2)
+                    if result.returncode == 0:
+                        self.use_fallback_tts = True
+                        self.fallback_tts_cmd = cmd
+                        LOG.info(f'Using fallback TTS: {cmd[0]}')
+                        break
+                except (subprocess.SubprocessError, FileNotFoundError):
+                    continue
+            
+            if not self.use_fallback_tts:
+                LOG.warning('INWORLD_API_KEY not set and no fallback TTS found. Disabling TTS.')
+                self.enabled = False
 
         self._q: queue.Queue[str] = queue.Queue()
         self._stop = threading.Event()
@@ -222,10 +247,20 @@ class TTSSpeaker:
         LOG.info('🔇 TTS worker stopped')
 
     def _synthesize_tts(self, text: str) -> Optional[bytes]:
-        """Simple Inworld TTS: Dominus voice, fixed payload, stream chunks, return WAV bytes."""
-        if not self.inworld_api_key or requests is None:
-            return None
-        url = self.inworld_url or 'https://api.inworld.ai/tts/v1/voice:stream'
+        """TTS synthesis with Inworld API or fallback to system TTS."""
+        # Try Inworld API first
+        if self.inworld_api_key and requests is not None:
+            return self._inworld_tts(text)
+        
+        # Use fallback system TTS
+        if self.use_fallback_tts and self.fallback_tts_cmd:
+            return self._fallback_tts(text)
+            
+        return None
+    
+    def _inworld_tts(self, text: str) -> Optional[bytes]:
+        """Inworld TTS synthesis."""
+        url = self.inworld_url
         headers = {
             'Authorization': f'Basic {self.inworld_api_key}',
             'Content-Type': 'application/json',
@@ -285,6 +320,47 @@ class TTSSpeaker:
             return buf.getvalue()
         except Exception as e:
             LOG.warning(f'Inworld TTS request failed: {e}')
+            return None
+    
+    def _fallback_tts(self, text: str) -> Optional[bytes]:
+        """Fallback TTS using system commands like espeak."""
+        if not self.fallback_tts_cmd:
+            return None
+            
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.wav') as tmp:
+                # Prepare command based on TTS system
+                cmd = self.fallback_tts_cmd.copy()
+                
+                if 'espeak' in cmd[0]:
+                    # espeak -w output.wav "text"
+                    cmd.extend(['-w', tmp.name, text])
+                elif 'pico2wave' in cmd[0]:
+                    # pico2wave -w output.wav "text"
+                    cmd.extend(['-w', tmp.name, text])
+                elif 'festival' in cmd[0]:
+                    # echo "text" | festival --tts
+                    cmd = ['bash', '-c', f'echo "{text}" | festival --tts --pipe']
+                    # This won't produce WAV, skip for now
+                    return None
+                else:
+                    # Generic: command "text" > output.wav
+                    return None
+                
+                # Execute TTS command with suppression
+                with _suppress_alsa():
+                    result = subprocess.run(cmd, capture_output=True, timeout=10)
+                
+                if result.returncode == 0 and tmp.name:
+                    # Read the generated WAV file
+                    with open(tmp.name, 'rb') as f:
+                        return f.read()
+                else:
+                    LOG.warning(f'Fallback TTS failed: {result.stderr}')
+                    return None
+                    
+        except Exception as e:
+            LOG.warning(f'Fallback TTS error: {e}')
             return None
 
     def _play_audio(self, wav_bytes: bytes):

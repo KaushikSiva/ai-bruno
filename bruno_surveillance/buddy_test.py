@@ -27,6 +27,21 @@ from typing import List, Dict, Optional, Any
 
 import requests
 
+# Load environment variables from .env file
+try:
+    from pathlib import Path
+    env_file = Path(__file__).parent.parent / '.env'
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    if key and not key in os.environ:  # Don't override existing env vars
+                        os.environ[key] = value
+except Exception:
+    pass  # Silently continue if .env loading fails
+
 from utils import LOG
 from audio_tts import TTSSpeaker
 
