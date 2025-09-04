@@ -93,6 +93,61 @@ def _groq_transcribe_wav(wav_bytes: bytes, model: Optional[str] = None, api_base
         return ''
 
 
+# ---------------- Optional head/servo helpers ----------------
+try:
+    import sys as _sys
+    _sys.path.append('/home/pi/MasterPi')
+    from common.ros_robot_controller_sdk import Board  # type: ignore
+    _BOARD_OK = True
+except Exception:
+    Board = None  # type: ignore
+    _BOARD_OK = False
+
+
+class HeadMotion:
+    """Minimal helper to nod and pitch head up/down (servo 3).
+    Safe to construct even if Board is unavailable.
+    """
+    def __init__(self):
+        self.board = Board() if _BOARD_OK else None
+        self.servo_id = int(os.environ.get('HEAD_PITCH_SERVO', '3'))
+        # Tunables (may vary by unit)
+        self.HEAD_UP = int(os.environ.get('HEAD_UP', '650'))
+        self.HEAD_DOWN = int(os.environ.get('HEAD_DOWN', '900'))
+        # Enable PWM channels if possible
+        if self.board:
+            try:
+                for ch in (1, 2, 3, 4, 5, 6):
+                    try:
+                        self.board.pwm_servo_enable(ch, True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    def pitch(self, value: int, time_s: float = 0.08):
+        if not self.board:
+            return
+        try:
+            self.board.pwm_servo_set_position(time_s, [[self.servo_id, value]])
+        except Exception:
+            pass
+
+    def look_up(self):
+        self.pitch(self.HEAD_UP, 0.08)
+
+    def look_down(self):
+        self.pitch(self.HEAD_DOWN, 0.08)
+
+    def nod(self):
+        if not self.board:
+            return
+        seq = [self.HEAD_UP, self.HEAD_DOWN, self.HEAD_UP, int((self.HEAD_UP + self.HEAD_DOWN) / 2)]
+        for v in seq:
+            self.pitch(v, 0.08)
+            time.sleep(0.15)
+
+
 class STT:
     """Speech-to-text facade: Groq Whisper primary, Vosk fallback, then SR engines."""
     def __init__(self, device_index: int | None = None, vosk_model_path: str | None = None, use_groq: Optional[bool] = None):
@@ -256,6 +311,7 @@ def main():
     wake_info = f" Say '{args.wake}' once to wake me; say 'go to sleep' to pause." if args.wake else ''
     print(f"Buddy ready.{wake_info} Say or type 'stop' to end.\n")
 
+    head = HeadMotion()
     try:
         empty_in_a_row = 0
         woken = False if args.wake else True
@@ -290,11 +346,21 @@ def main():
                     user_text = user_text.strip() or 'hello'
                     woken = True
                     print("(woken)")
+                    # Look up and nod on wake
+                    try:
+                        head.look_up(); head.nod()
+                    except Exception:
+                        pass
                 else:
                     # Handle sleep intents
                     if any(p in low for p in ("go to sleep", "sleep now", "sleep bruno")):
                         woken = False
                         print(f"(sleeping — say '{args.wake}' to wake me)")
+                        # Look down on sleep
+                        try:
+                            head.look_down()
+                        except Exception:
+                            pass
                         continue
                     # If user repeats wake phrase, strip it but stay awake
                     if wake in low:
@@ -324,6 +390,11 @@ def main():
         try:
             if tts:
                 tts.stop(wait=False)
+        except Exception:
+            pass
+        # Just before stopping, face down
+        try:
+            head.look_down()
         except Exception:
             pass
 
