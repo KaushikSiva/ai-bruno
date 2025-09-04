@@ -24,22 +24,19 @@ def _suppress_alsa():
         # Set environment variables to suppress all audio backend verbosity
         old_env = {}
         audio_env_vars = {
-            # ALSA suppression - Pi specific
+            # ALSA suppression - Pi specific (but preserve PulseAudio preference)
             'ALSA_PCM_CARD': '0',
             'ALSA_PCM_DEVICE': '0', 
             'ALSA_LOG_LEVEL': '0',
             'ALSA_PLUGIN_DIR': '/usr/lib/arm-linux-gnueabihf/alsa-lib',
             'ALSA_MIXER_SIMPLE': '1',
-            'ALSA_CARD': 'PCH',
             # JACK suppression - Pi specific
             'JACK_NO_START_SERVER': '1',
             'JACK_NO_AUDIO_RESERVATION': '1', 
             'JACK_SILENCE_MESSAGES': '1',
             'JACK_DEFAULT_SERVER': 'dummy',
             'JACK_DRIVER': 'dummy',
-            # PulseAudio suppression - Pi specific
-            'PULSE_RUNTIME_PATH': '/tmp/pulse-pi',
-            'PULSE_SERVER': 'unix:/tmp/pulse-socket',
+            # PulseAudio configuration - prefer PulseAudio over ALSA direct
             'PULSE_LATENCY_MSEC': '30',
             'PA_ALSA_PLUGHW': '1',
             # OSS suppression
@@ -47,12 +44,15 @@ def _suppress_alsa():
             'OSS_MIXERDEV': '/dev/null',
             # Pi audio hardware specific
             'AUDIODEV': '/dev/null',
-            'AUDIODRIVER': 'null',
-            'SDL_AUDIODRIVER': 'dummy',
+            'AUDIODRIVER': 'pulse',  # Prefer PulseAudio
+            'SDL_AUDIODRIVER': 'pulse',  # Use PulseAudio for SDL
             # Additional Pi suppressions
             'LIBASOUND_DEBUG': '0',
             'ALSA_PERIOD_TIME': '0',
-            'ALSA_BUFFER_TIME': '0'
+            'ALSA_BUFFER_TIME': '0',
+            # Suppress specific ALSA error types
+            'ALSA_PCM_STREAM': '0',
+            'ALSA_RAWMIDI_STREAM': '0'
         }
         
         for key, value in audio_env_vars.items():
@@ -333,15 +333,18 @@ class TTSSpeaker:
                 except:
                     pass
             
-            # Try Pi-optimized audio players with enhanced suppression
+            # Try Pi-optimized audio players with PulseAudio priority
             audio_commands = [
-                # Pi-specific ALSA commands
+                # PulseAudio (preferred - usually works best on Pi)
+                ["paplay", tmp.name],
+                ["paplay", "--volume", "65536", tmp.name],     # Max volume
+                # Pi-specific ALSA commands (fallback)
+                ["aplay", "-q", "-D", "pulse", tmp.name],      # ALSA->PulseAudio bridge
+                ["aplay", "-q", "-D", "default", tmp.name],    # ALSA default device
                 ["aplay", "-q", "-D", "hw:0,0", tmp.name],     # Pi hardware device
                 ["aplay", "-q", "-D", "plughw:0,0", tmp.name], # Pi plugin hardware
-                ["aplay", "-q", "-D", "default", tmp.name],    # ALSA default device
                 ["aplay", "-q", tmp.name],                     # ALSA auto-detect
-                # Fallback players
-                ["paplay", tmp.name],                          # PulseAudio
+                # Final fallback
                 ["ffplay", "-nodisp", "-autoexit", "-loglevel", "panic", "-volume", "100", tmp.name]
             ]
             

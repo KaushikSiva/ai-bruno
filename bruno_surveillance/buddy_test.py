@@ -251,12 +251,22 @@ class STT:
             import speech_recognition as sr  # type: ignore
             self._recognizer = sr.Recognizer()
             
-            # Try multiple times with different suppression strategies for Pi
-            mic_init_attempts = [
-                lambda: sr.Microphone(device_index=device_index, sample_rate=16000, chunk_size=1024),
-                lambda: sr.Microphone(device_index=0, sample_rate=16000, chunk_size=1024),  # Force device 0
-                lambda: sr.Microphone(sample_rate=16000, chunk_size=1024)  # Auto-detect
-            ]
+            # Try multiple audio backends and device indices for Pi
+            mic_init_attempts = []
+            
+            # Try user-specified device first if provided
+            if device_index is not None:
+                mic_init_attempts.append(lambda: sr.Microphone(device_index=device_index, sample_rate=16000, chunk_size=1024))
+            
+            # Try PulseAudio default (usually works best on Pi)
+            mic_init_attempts.append(lambda: sr.Microphone(sample_rate=16000, chunk_size=1024))  # Auto-detect
+            
+            # Try ALSA device 0 specifically
+            mic_init_attempts.append(lambda: sr.Microphone(device_index=0, sample_rate=16000, chunk_size=1024))
+            
+            # Try with different sample rates for compatibility
+            mic_init_attempts.append(lambda: sr.Microphone(device_index=0, sample_rate=44100, chunk_size=2048))
+            mic_init_attempts.append(lambda: sr.Microphone(sample_rate=44100, chunk_size=2048))
             
             for attempt, mic_factory in enumerate(mic_init_attempts):
                 try:
@@ -292,27 +302,33 @@ class STT:
         import speech_recognition as sr  # type: ignore
         print(prompt, end='', flush=True)
         try:
-            with self._mic as source:
-                with _suppress_alsa():
-                    audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=12)
+            # Apply comprehensive suppression to entire audio operation
+            with _suppress_alsa():
+                with self._mic as source:
+                    # Additional suppression during actual listening
+                    with _suppress_alsa():
+                        audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=12)
             
-            # Try Groq first if available
+            # Try Groq first if available (with suppression)
             if self._use_groq:
                 try:
-                    wav = audio.get_wav_data(convert_rate=16000, convert_width=2)
+                    with _suppress_alsa():
+                        wav = audio.get_wav_data(convert_rate=16000, convert_width=2)
                     txt = _groq_transcribe_wav(wav)
                     if txt:
                         return txt
                 except Exception:
                     pass
             
-            # Fallback to Google
+            # Fallback to Google (with suppression)
             try:
-                text = self._recognizer.recognize_google(audio)
+                with _suppress_alsa():
+                    text = self._recognizer.recognize_google(audio)
                 return text.strip()
             except Exception:
                 try:
-                    text = self._recognizer.recognize_sphinx(audio)
+                    with _suppress_alsa():
+                        text = self._recognizer.recognize_sphinx(audio)
                     return text.strip()
                 except Exception:
                     print("(didn't catch that)")
@@ -335,22 +351,19 @@ def _suppress_alsa():
         # Set environment variables to suppress all audio backend verbosity
         old_env = {}
         audio_env_vars = {
-            # ALSA suppression - Pi specific
+            # ALSA suppression - Pi specific (but preserve PulseAudio preference)
             'ALSA_PCM_CARD': '0',
             'ALSA_PCM_DEVICE': '0', 
             'ALSA_LOG_LEVEL': '0',
             'ALSA_PLUGIN_DIR': '/usr/lib/arm-linux-gnueabihf/alsa-lib',
             'ALSA_MIXER_SIMPLE': '1',
-            'ALSA_CARD': 'PCH',
             # JACK suppression - Pi specific
             'JACK_NO_START_SERVER': '1',
             'JACK_NO_AUDIO_RESERVATION': '1', 
             'JACK_SILENCE_MESSAGES': '1',
             'JACK_DEFAULT_SERVER': 'dummy',
             'JACK_DRIVER': 'dummy',
-            # PulseAudio suppression - Pi specific
-            'PULSE_RUNTIME_PATH': '/tmp/pulse-pi',
-            'PULSE_SERVER': 'unix:/tmp/pulse-socket',
+            # PulseAudio configuration - prefer PulseAudio over ALSA direct
             'PULSE_LATENCY_MSEC': '30',
             'PA_ALSA_PLUGHW': '1',
             # OSS suppression
@@ -358,12 +371,15 @@ def _suppress_alsa():
             'OSS_MIXERDEV': '/dev/null',
             # Pi audio hardware specific
             'AUDIODEV': '/dev/null',
-            'AUDIODRIVER': 'null',
-            'SDL_AUDIODRIVER': 'dummy',
+            'AUDIODRIVER': 'pulse',  # Prefer PulseAudio
+            'SDL_AUDIODRIVER': 'pulse',  # Use PulseAudio for SDL
             # Additional Pi suppressions
             'LIBASOUND_DEBUG': '0',
             'ALSA_PERIOD_TIME': '0',
-            'ALSA_BUFFER_TIME': '0'
+            'ALSA_BUFFER_TIME': '0',
+            # Suppress specific ALSA error types
+            'ALSA_PCM_STREAM': '0',
+            'ALSA_RAWMIDI_STREAM': '0'
         }
         
         for key, value in audio_env_vars.items():
