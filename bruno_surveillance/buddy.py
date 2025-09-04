@@ -64,13 +64,18 @@ class STT:
     def __init__(self, device_index: int | None = None):
         self._recognizer = None
         self._mic = None
+        self._device_index = device_index
+        # Some Pi images are noisy with ALSA/JACK prints; be robust and quiet
         try:
             import speech_recognition as sr  # type: ignore
             self._recognizer = sr.Recognizer()
             try:
-                self._mic = sr.Microphone(device_index=device_index)
+                with _suppress_alsa():
+                    # Conservative audio params to match many USB mics
+                    self._mic = sr.Microphone(device_index=device_index, sample_rate=16000, chunk_size=1024)
                 with self._mic as source:
-                    self._recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    self._recognizer.dynamic_energy_threshold = True
+                    self._recognizer.adjust_for_ambient_noise(source, duration=0.6)
                 LOG.info(f'🎙️  Microphone ready (SpeechRecognition, device_index={self._mic.device_index})')
             except Exception as e:
                 LOG.warning(f'No microphone: {e}')
@@ -92,7 +97,8 @@ class STT:
         print(prompt, end='', flush=True)
         try:
             with self._mic as source:
-                audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=12)
+                with _suppress_alsa():
+                    audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=12)
             # Try several engines in order
             try:
                 text = self._recognizer.recognize_google(audio)
@@ -107,6 +113,26 @@ class STT:
             return ''
         except Exception:
             return ''
+
+
+from contextlib import contextmanager
+import os as _os
+
+@contextmanager
+def _suppress_alsa():
+    """Temporarily redirect C-level stderr to /dev/null to silence ALSA/JACK noise."""
+    try:
+        devnull_fd = _os.open(_os.devnull, _os.O_WRONLY)
+        saved_stderr_fd = _os.dup(2)
+        _os.dup2(devnull_fd, 2)
+        _os.close(devnull_fd)
+        yield
+    finally:
+        try:
+            _os.dup2(saved_stderr_fd, 2)
+            _os.close(saved_stderr_fd)
+        except Exception:
+            pass
 
 
 def main():
