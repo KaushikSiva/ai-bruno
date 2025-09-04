@@ -243,6 +243,7 @@ def _groq_transcribe_wav(wav_bytes: bytes, model: Optional[str] = None, api_base
     data = {
         'model': model,
         'response_format': 'json',
+        'language': 'en',  # Force English language detection
     }
     headers = {
         'Authorization': f'Bearer {api_key}',
@@ -350,11 +351,15 @@ class STT:
                         # Test microphone with enhanced suppression
                         with _suppress_alsa():
                             with self._mic as source:
+                                # Enhanced microphone settings for better wake detection
                                 self._recognizer.dynamic_energy_threshold = True
-                                self._recognizer.energy_threshold = int(os.environ.get('BUDDY_ENERGY_THRESHOLD', '200'))
-                                self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '0.6'))
-                                self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.3'))
-                                self._recognizer.adjust_for_ambient_noise(source, duration=0.5)  # Shorter for Pi
+                                self._recognizer.energy_threshold = int(os.environ.get('BUDDY_ENERGY_THRESHOLD', '150'))  # Lower for sensitivity
+                                self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '0.4'))  # Shorter pause
+                                self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.2'))  # Shorter non-speaking
+                                self._recognizer.operation_timeout = None  # No timeout for continuous operation
+                                # Adjust for ambient noise with better settings
+                                self._recognizer.adjust_for_ambient_noise(source, duration=1.0)  # Longer calibration
+                                LOG.info(f'Microphone calibrated: energy={self._recognizer.energy_threshold}')
                     LOG.info(f'🎙️  Microphone ready (attempt {attempt + 1})')
                     break
                 except Exception as e:
@@ -380,44 +385,62 @@ class STT:
             # Apply comprehensive suppression to entire audio operation
             with _suppress_alsa():
                 with self._mic as source:
-                    # Additional suppression during actual listening
+                    # Enhanced listening with better timeout settings
                     with _suppress_alsa():
-                        audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=12)
+                        # Shorter timeouts for faster response, longer phrase limit for full sentences
+                        audio = self._recognizer.listen(source, timeout=5, phrase_time_limit=8)
             
-            # Try Groq first if available (with suppression)
+            # Try Groq first if available (with English language preference)
             if self._use_groq:
                 try:
                     with _suppress_alsa():
                         wav = audio.get_wav_data(convert_rate=16000, convert_width=2)
                     txt = _groq_transcribe_wav(wav)
                     if txt:
-                        return txt
+                        # Clean up potential language recognition issues
+                        cleaned_txt = _clean_transcription(txt)
+                        return cleaned_txt
                 except Exception:
                     pass
             
-            # Fallback to Google (with suppression)
+            # Fallback to Google with English language specification
             try:
                 with _suppress_alsa():
-                    text = self._recognizer.recognize_google(audio)
-                return text.strip()
+                    # Force English language detection
+                    text = self._recognizer.recognize_google(audio, language='en-US')
+                cleaned_text = _clean_transcription(text.strip())
+                return cleaned_text
             except Exception:
                 try:
+                    # Try without language specification as fallback
                     with _suppress_alsa():
-                        text = self._recognizer.recognize_sphinx(audio)
-                    return text.strip()
+                        text = self._recognizer.recognize_google(audio)
+                    cleaned_text = _clean_transcription(text.strip())
+                    return cleaned_text
                 except Exception:
-                    print("(didn't catch that)")
-                    return ''
+                    try:
+                        with _suppress_alsa():
+                            text = self._recognizer.recognize_sphinx(audio)
+                        cleaned_text = _clean_transcription(text.strip())
+                        return cleaned_text
+                    except Exception as e:
+                        LOG.debug(f'All STT methods failed: {e}')
+                        print("(didn't catch that)")
+                        return ''
         except sr.WaitTimeoutError:
+            LOG.debug('STT timeout occurred')
             print("(timeout)")
             return ''
-        except Exception:
+        except Exception as e:
+            LOG.warning(f'Microphone error: {e}')
             print("(mic error)")
             return ''
 
 
 from contextlib import contextmanager
 import os as _os
+import difflib
+from typing import Tuple
 
 @contextmanager
 def _suppress_alsa():
@@ -491,6 +514,123 @@ def _suppress_alsa():
             pass
 
 
+def _fuzzy_wake_detection(user_text: str, wake_phrase: str, threshold: float = 0.6) -> Tuple[bool, float, str]:
+    """Enhanced wake phrase detection with fuzzy matching and common variations."""
+    user_text = user_text.lower().strip()
+    wake_phrase = wake_phrase.lower().strip()
+    
+    # Direct match (highest confidence)
+    if wake_phrase in user_text:
+        return True, 1.0, wake_phrase
+    
+    # Common variations for "hey bruno"
+    wake_variations = [
+        wake_phrase,
+        wake_phrase.replace(' ', ''),  # "heybruno"
+        'a bruno',  # Common misrecognition
+        'hey bruno',
+        'hey bruno!',
+        'hey bruno.',
+        'hey bruno?',
+        'bruno',
+        'bruno!',
+        'bruno.',
+        'bruno?',
+        'wake up bruno',
+        'wake bruno',
+        'hello bruno'
+    ]
+    
+    best_match = ''
+    best_confidence = 0.0
+    
+    # Check exact variations
+    for variation in wake_variations:
+        if variation in user_text:
+            confidence = 0.9 if variation == wake_phrase else 0.8
+            if confidence > best_confidence:
+                best_confidence = confidence
+                best_match = variation
+    
+    # Fuzzy matching for partial matches (more restrictive)
+    if best_confidence == 0.0:
+        # Only do fuzzy matching if the text contains key terms
+        if 'bruno' in wake_phrase.lower():
+            has_bruno_like = any(term in user_text for term in ['bruno', 'brno', 'bruno!', 'bruno.', 'bruno?'])
+            if not has_bruno_like:
+                return False, 0.0, ''
+        
+        for variation in wake_variations:
+            # Use sequence matching for similarity, but require minimum overlap
+            if len(variation) < 3:  # Skip very short variations for fuzzy matching
+                continue
+            similarity = difflib.SequenceMatcher(None, variation, user_text).ratio()
+            if similarity > threshold and similarity > best_confidence:
+                best_confidence = similarity
+                best_match = variation
+    
+    # Word-based matching (looking for key words) - more restrictive
+    if best_confidence < threshold:
+        words = user_text.split()
+        wake_words = wake_phrase.split()
+        
+        # Must contain "bruno" or similar for bruno-related wake phrases
+        if 'bruno' in wake_phrase.lower():
+            has_bruno_like = any('bruno' in word or 'brno' in word for word in words)
+            if not has_bruno_like:
+                return False, 0.0, ''
+        
+        # Count matching words with exact matches preferred
+        matched_words = 0
+        matched_terms = []
+        for wake_word in wake_words:
+            for word in words:
+                if wake_word == word:  # Exact match
+                    matched_words += 1
+                    matched_terms.append(word)
+                    break
+                elif wake_word in word or word in wake_word:  # Partial match (lower weight)
+                    matched_words += 0.5
+                    matched_terms.append(word)
+                    break
+        
+        word_confidence = matched_words / len(wake_words)
+        
+        if word_confidence >= 0.5 and word_confidence > best_confidence:
+            best_confidence = word_confidence
+            best_match = ' '.join(matched_terms)
+    
+    return best_confidence >= threshold, best_confidence, best_match
+
+
+def _clean_transcription(text: str) -> str:
+    """Clean up transcription text to handle common recognition issues."""
+    if not text:
+        return text
+    
+    # Handle common misrecognitions
+    text = text.strip()
+    
+    # Fix common character/language confusion
+    replacements = {
+        'यस्': 'yes',  # Devanagari script misrecognition
+        'नो': 'no',    # Devanagari script misrecognition
+        'ब्रूनो': 'bruno',  # Bruno in Devanagari
+        'हे': 'hey',   # Hey in Devanagari
+    }
+    
+    for wrong, correct in replacements.items():
+        text = text.replace(wrong, correct)
+    
+    # Remove non-ASCII characters that might be misrecognitions
+    cleaned = ''.join(char if ord(char) < 128 else ' ' for char in text)
+    
+    # Clean up extra spaces
+    cleaned = ' '.join(cleaned.split())
+    
+    return cleaned
+
+
 def main():
     p = argparse.ArgumentParser(description='Bruno Buddy Enhanced - Wake-up System')
     p.add_argument('--audio', action='store_true', help='Speak responses with TTS')
@@ -500,7 +640,14 @@ def main():
     p.add_argument('--list-mics', action='store_true', help='List available microphones and exit')
     p.add_argument('--vosk-model', default=os.environ.get('VOSK_MODEL', None), help='Path to Vosk offline model (fallback)')
     p.add_argument('--wake', default=os.environ.get('BUDDY_WAKE', 'hey bruno'), help='Wake phrase; only respond when transcript contains this (default: "hey bruno")')
+    p.add_argument('--wake-sensitivity', type=float, default=0.6, help='Wake detection sensitivity (0.0-1.0, default: 0.6)')
+    p.add_argument('--debug-wake', action='store_true', help='Enable debug logging for wake detection')
     args = p.parse_args()
+    
+    # Enable debug logging if requested
+    if args.debug_wake:
+        import logging
+        logging.getLogger().setLevel(logging.DEBUG)
 
     if args.list_mics:
         try:
@@ -581,19 +728,28 @@ def main():
                     pass
                 continue
 
-            # Enhanced wake/sleep logic
+            # Enhanced wake/sleep logic with fuzzy matching
             if args.wake:
                 low = user_text.lower()
                 wake = args.wake.lower()
                 
                 if not woken:
-                    # Sleeping - only respond to wake phrase
-                    if wake not in low:
+                    # Sleeping - use fuzzy wake phrase detection
+                    wake_detected, wake_confidence, matched_phrase = _fuzzy_wake_detection(low, wake, args.wake_sensitivity)
+                    
+                    if not wake_detected:
+                        # Log failed wake attempts for debugging
+                        if any(word in low for word in ['bruno', 'hey', 'wake']):
+                            LOG.debug(f'Wake attempt failed: "{user_text}" (confidence: {wake_confidence:.2f})')
                         continue
                     
                     # WAKE UP SEQUENCE
-                    idx = low.find(wake)
-                    user_text = user_text[:idx] + user_text[idx+len(args.wake):]
+                    LOG.info(f'Wake detected: "{matched_phrase}" (confidence: {wake_confidence:.2f})')
+                    
+                    # Remove wake phrase from user text
+                    if matched_phrase in low:
+                        idx = low.find(matched_phrase)
+                        user_text = user_text[:idx] + user_text[idx+len(matched_phrase):]
                     user_text = user_text.strip() or 'hello'
                     woken = True
                     first_wake_this_session = True
