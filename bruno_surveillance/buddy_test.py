@@ -246,25 +246,38 @@ class STT:
         else:
             self._use_groq = bool(use_groq)
         
-        # Initialize speech recognition with enhanced ALSA suppression
+        # Initialize speech recognition with Pi-optimized ALSA suppression
         try:
             import speech_recognition as sr  # type: ignore
             self._recognizer = sr.Recognizer()
-            try:
-                with _suppress_alsa():
-                    self._mic = sr.Microphone(device_index=device_index, sample_rate=16000, chunk_size=1024)
-                    # Microphone calibration with suppression
-                    with self._mic as source:
-                        self._recognizer.dynamic_energy_threshold = True
-                        self._recognizer.energy_threshold = int(os.environ.get('BUDDY_ENERGY_THRESHOLD', '200'))
-                        self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '0.6'))
-                        self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.3'))
-                        self._recognizer.adjust_for_ambient_noise(source, duration=0.8)
-                LOG.info(f'🎙️  Microphone ready')
-            except Exception as e:
-                LOG.warning(f'No microphone: {e}')
-                self._recognizer = None
-                self._mic = None
+            
+            # Try multiple times with different suppression strategies for Pi
+            mic_init_attempts = [
+                lambda: sr.Microphone(device_index=device_index, sample_rate=16000, chunk_size=1024),
+                lambda: sr.Microphone(device_index=0, sample_rate=16000, chunk_size=1024),  # Force device 0
+                lambda: sr.Microphone(sample_rate=16000, chunk_size=1024)  # Auto-detect
+            ]
+            
+            for attempt, mic_factory in enumerate(mic_init_attempts):
+                try:
+                    with _suppress_alsa():
+                        self._mic = mic_factory()
+                        # Test microphone with enhanced suppression
+                        with _suppress_alsa():
+                            with self._mic as source:
+                                self._recognizer.dynamic_energy_threshold = True
+                                self._recognizer.energy_threshold = int(os.environ.get('BUDDY_ENERGY_THRESHOLD', '200'))
+                                self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '0.6'))
+                                self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.3'))
+                                self._recognizer.adjust_for_ambient_noise(source, duration=0.5)  # Shorter for Pi
+                    LOG.info(f'🎙️  Microphone ready (attempt {attempt + 1})')
+                    break
+                except Exception as e:
+                    if attempt == len(mic_init_attempts) - 1:
+                        LOG.warning(f'No microphone after {len(mic_init_attempts)} attempts: {e}')
+                        self._recognizer = None
+                        self._mic = None
+                    continue
         except Exception:
             self._recognizer = None
             self._mic = None
@@ -317,28 +330,40 @@ import os as _os
 
 @contextmanager
 def _suppress_alsa():
-    """Enhanced ALSA/JACK/Audio error suppression - redirects both stdout and stderr."""
+    """Raspberry Pi optimized ALSA/JACK/Audio error suppression."""
     try:
         # Set environment variables to suppress all audio backend verbosity
         old_env = {}
         audio_env_vars = {
-            # ALSA suppression
-            'ALSA_PCM_CARD': 'default',
-            'ALSA_PCM_DEVICE': '0',
+            # ALSA suppression - Pi specific
+            'ALSA_PCM_CARD': '0',
+            'ALSA_PCM_DEVICE': '0', 
             'ALSA_LOG_LEVEL': '0',
-            'ALSA_PLUGIN_DIR': '/usr/lib/alsa-lib',
-            # JACK suppression
+            'ALSA_PLUGIN_DIR': '/usr/lib/arm-linux-gnueabihf/alsa-lib',
+            'ALSA_MIXER_SIMPLE': '1',
+            'ALSA_CARD': 'PCH',
+            # JACK suppression - Pi specific
             'JACK_NO_START_SERVER': '1',
-            'JACK_NO_AUDIO_RESERVATION': '1',
+            'JACK_NO_AUDIO_RESERVATION': '1', 
             'JACK_SILENCE_MESSAGES': '1',
-            # PulseAudio suppression  
-            'PULSE_RUNTIME_PATH': '/tmp',
+            'JACK_DEFAULT_SERVER': 'dummy',
+            'JACK_DRIVER': 'dummy',
+            # PulseAudio suppression - Pi specific
+            'PULSE_RUNTIME_PATH': '/tmp/pulse-pi',
             'PULSE_SERVER': 'unix:/tmp/pulse-socket',
             'PULSE_LATENCY_MSEC': '30',
+            'PA_ALSA_PLUGHW': '1',
             # OSS suppression
             'OSS_AUDIODEV': '/dev/null',
-            # General audio suppression
-            'SDL_AUDIODRIVER': 'alsa'
+            'OSS_MIXERDEV': '/dev/null',
+            # Pi audio hardware specific
+            'AUDIODEV': '/dev/null',
+            'AUDIODRIVER': 'null',
+            'SDL_AUDIODRIVER': 'dummy',
+            # Additional Pi suppressions
+            'LIBASOUND_DEBUG': '0',
+            'ALSA_PERIOD_TIME': '0',
+            'ALSA_BUFFER_TIME': '0'
         }
         
         for key, value in audio_env_vars.items():

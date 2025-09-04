@@ -19,28 +19,40 @@ from utils import LOG
 
 @contextmanager
 def _suppress_alsa():
-    """Enhanced ALSA/JACK/Audio error suppression - redirects both stdout and stderr."""
+    """Raspberry Pi optimized ALSA/JACK/Audio error suppression."""
     try:
         # Set environment variables to suppress all audio backend verbosity
         old_env = {}
         audio_env_vars = {
-            # ALSA suppression
-            'ALSA_PCM_CARD': 'default',
-            'ALSA_PCM_DEVICE': '0',
+            # ALSA suppression - Pi specific
+            'ALSA_PCM_CARD': '0',
+            'ALSA_PCM_DEVICE': '0', 
             'ALSA_LOG_LEVEL': '0',
-            'ALSA_PLUGIN_DIR': '/usr/lib/alsa-lib',
-            # JACK suppression
+            'ALSA_PLUGIN_DIR': '/usr/lib/arm-linux-gnueabihf/alsa-lib',
+            'ALSA_MIXER_SIMPLE': '1',
+            'ALSA_CARD': 'PCH',
+            # JACK suppression - Pi specific
             'JACK_NO_START_SERVER': '1',
-            'JACK_NO_AUDIO_RESERVATION': '1',
+            'JACK_NO_AUDIO_RESERVATION': '1', 
             'JACK_SILENCE_MESSAGES': '1',
-            # PulseAudio suppression  
-            'PULSE_RUNTIME_PATH': '/tmp',
+            'JACK_DEFAULT_SERVER': 'dummy',
+            'JACK_DRIVER': 'dummy',
+            # PulseAudio suppression - Pi specific
+            'PULSE_RUNTIME_PATH': '/tmp/pulse-pi',
             'PULSE_SERVER': 'unix:/tmp/pulse-socket',
             'PULSE_LATENCY_MSEC': '30',
+            'PA_ALSA_PLUGHW': '1',
             # OSS suppression
             'OSS_AUDIODEV': '/dev/null',
-            # General audio suppression
-            'SDL_AUDIODRIVER': 'alsa'
+            'OSS_MIXERDEV': '/dev/null',
+            # Pi audio hardware specific
+            'AUDIODEV': '/dev/null',
+            'AUDIODRIVER': 'null',
+            'SDL_AUDIODRIVER': 'dummy',
+            # Additional Pi suppressions
+            'LIBASOUND_DEBUG': '0',
+            'ALSA_PERIOD_TIME': '0',
+            'ALSA_BUFFER_TIME': '0'
         }
         
         for key, value in audio_env_vars.items():
@@ -304,18 +316,33 @@ class TTSSpeaker:
             tmp.write(wav_bytes)
             tmp.flush()
             
-            # Set system volume to max (suppress ALSA/JACK errors)
+            # Set Pi system volume and audio device (suppress ALSA/JACK errors)
             with _suppress_alsa():
                 try:
-                    subprocess.run(["amixer", "set", "Master", "100%"], capture_output=True, timeout=5)
+                    # Pi-specific volume control attempts
+                    for vol_cmd in [
+                        ["amixer", "set", "Master", "100%"],
+                        ["amixer", "set", "PCM", "100%"],
+                        ["amixer", "-c", "0", "set", "Master", "100%"]
+                    ]:
+                        try:
+                            subprocess.run(vol_cmd, capture_output=True, timeout=3)
+                            break
+                        except:
+                            continue
                 except:
                     pass
             
-            # Try audio players with enhanced suppression
+            # Try Pi-optimized audio players with enhanced suppression
             audio_commands = [
-                ["aplay", "-q", "-D", "default", tmp.name],  # ALSA default device
-                ["aplay", "-q", tmp.name],                   # ALSA auto-detect
-                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-volume", "100", tmp.name]
+                # Pi-specific ALSA commands
+                ["aplay", "-q", "-D", "hw:0,0", tmp.name],     # Pi hardware device
+                ["aplay", "-q", "-D", "plughw:0,0", tmp.name], # Pi plugin hardware
+                ["aplay", "-q", "-D", "default", tmp.name],    # ALSA default device
+                ["aplay", "-q", tmp.name],                     # ALSA auto-detect
+                # Fallback players
+                ["paplay", tmp.name],                          # PulseAudio
+                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "panic", "-volume", "100", tmp.name]
             ]
             
             for cmd in audio_commands:
