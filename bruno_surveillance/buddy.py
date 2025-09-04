@@ -60,11 +60,21 @@ def _lmstudio_chat(messages: List[Dict[str, str]],
 
 
 class STT:
-    """Simple speech-to-text facade: tries SpeechRecognition; else falls back to input()."""
-    def __init__(self, device_index: int | None = None):
+    """Speech-to-text facade with Vosk (offline) fallback, else SpeechRecognition, else text."""
+    def __init__(self, device_index: int | None = None, vosk_model_path: str | None = None):
         self._recognizer = None
         self._mic = None
         self._device_index = device_index
+        self._vosk_model = None
+        # Try Vosk model if provided
+        if vosk_model_path:
+            try:
+                from vosk import Model  # type: ignore
+                self._vosk_model = Model(vosk_model_path)
+                LOG.info(f"🗣️  Vosk model loaded: {vosk_model_path}")
+            except Exception as e:
+                LOG.warning(f"Vosk model load failed: {e}")
+                self._vosk_model = None
         # Some Pi images are noisy with ALSA/JACK prints; be robust and quiet
         try:
             import speech_recognition as sr  # type: ignore
@@ -103,7 +113,22 @@ class STT:
             with self._mic as source:
                 with _suppress_alsa():
                     audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=12)
-            # Try several engines in order
+            # Try Vosk (offline) first if available
+            if self._vosk_model is not None:
+                try:
+                    # Convert to 16k mono 16-bit PCM
+                    pcm = audio.get_raw_data(convert_rate=16000, convert_width=2)
+                    from vosk import KaldiRecognizer  # type: ignore
+                    rec = KaldiRecognizer(self._vosk_model, 16000)
+                    ok = rec.AcceptWaveform(pcm)
+                    result_json = rec.Result() if ok else rec.PartialResult()
+                    data = json.loads(result_json)
+                    txt = (data.get('text') or '').strip()
+                    if txt:
+                        return txt
+                except Exception:
+                    pass
+            # Then try cloud/offline engines via SpeechRecognition
             try:
                 text = self._recognizer.recognize_google(audio)
                 return text.strip()
@@ -149,6 +174,8 @@ def main():
     p.add_argument('--system', default='You are Bruno, a concise, friendly assistant. Keep replies brief and helpful.')
     p.add_argument('--mic-index', type=int, default=None, help='SpeechRecognition microphone device index')
     p.add_argument('--list-mics', action='store_true', help='List available microphones and exit')
+    p.add_argument('--vosk-model', default=os.environ.get('VOSK_MODEL', None), help='Path to Vosk offline model')
+    p.add_argument('--wake', default=None, help='Wake word; only respond when transcript contains this (e.g., "bruno")')
     args = p.parse_args()
 
     if args.list_mics:
@@ -170,7 +197,7 @@ def main():
             LOG.warning(f'TTS init failed: {e}')
             tts = None
 
-    stt = STT(device_index=args.mic_index)
+    stt = STT(device_index=args.mic_index, vosk_model_path=args.vosk_model)
     if not stt.available:
         LOG.info('Mic unavailable; falling back to keyboard input.')
 
@@ -196,6 +223,15 @@ def main():
                         continue
                 continue
             empty_in_a_row = 0
+            # Wake word gating
+            if args.wake:
+                low = user_text.lower()
+                wake = args.wake.lower()
+                if wake not in low:
+                    # ignore until wake word detected
+                    continue
+                # Strip wake word once
+                user_text = low.replace(wake, '', 1).strip() or wake
             print(f'You: {user_text}')
             if user_text.strip().lower() in ('stop', 'quit', 'exit'):
                 print('Bye!')
