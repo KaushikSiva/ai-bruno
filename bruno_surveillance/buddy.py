@@ -253,11 +253,12 @@ def main():
         LOG.info('Mic unavailable; falling back to keyboard input.')
 
     messages: List[Dict[str, str]] = [{'role': 'system', 'content': args.system}]
-    wake_info = f" Say '{args.wake}' to talk." if args.wake else ''
+    wake_info = f" Say '{args.wake}' once to wake me; say 'go to sleep' to pause." if args.wake else ''
     print(f"Buddy ready.{wake_info} Say or type 'stop' to end.\n")
 
     try:
         empty_in_a_row = 0
+        woken = False if args.wake else True
         while True:
             user_text = stt.listen_once()
             if not user_text:
@@ -275,17 +276,30 @@ def main():
                         continue
                 continue
             empty_in_a_row = 0
-            # Wake word gating
+            # Wake/sleep gating (wake once, then stay awake until told to sleep)
             if args.wake:
                 low = user_text.lower()
                 wake = args.wake.lower()
-                if wake not in low:
-                    # ignore until wake phrase detected
-                    continue
-                # Strip only the first occurrence (keeps rest of content)
-                idx = low.find(wake)
-                user_text = user_text[:idx] + user_text[idx+len(args.wake):]
-                user_text = user_text.strip() or 'hello'
+                if not woken:
+                    if wake not in low:
+                        # ignore until wake phrase detected
+                        continue
+                    # Strip only the first occurrence (keep rest of content)
+                    idx = low.find(wake)
+                    user_text = user_text[:idx] + user_text[idx+len(args.wake):]
+                    user_text = user_text.strip() or 'hello'
+                    woken = True
+                    print("(woken)")
+                else:
+                    # Handle sleep intents
+                    if any(p in low for p in ("go to sleep", "sleep now", "sleep bruno")):
+                        woken = False
+                        print(f"(sleeping — say '{args.wake}' to wake me)")
+                        continue
+                    # If user repeats wake phrase, strip it but stay awake
+                    if wake in low:
+                        idx = low.find(wake)
+                        user_text = (user_text[:idx] + user_text[idx+len(args.wake):]).strip() or 'hello'
             print(f'You: {user_text}')
             if user_text.strip().lower() in ('stop', 'quit', 'exit'):
                 print('Bye!')
