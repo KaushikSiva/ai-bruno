@@ -24,6 +24,7 @@ import os
 import sys
 import time
 import json
+import re
 import argparse
 from typing import List, Dict, Optional
 
@@ -332,6 +333,28 @@ def main():
                         continue
                 continue
             empty_in_a_row = 0
+            # Global stop intent (works even before wake)
+            def _said_stop(t: str) -> bool:
+                return bool(re.search(r"\b(stop|quit|exit)\b", t.lower()))
+
+            if _said_stop(user_text):
+                print('Bye!')
+                # Face down before exiting
+                try:
+                    head.look_down()
+                except Exception:
+                    pass
+                break
+
+            # Interrupt speaking
+            if tts and re.search(r"\b(shut up|be quiet|stop speaking)\b", user_text.lower()):
+                try:
+                    tts.interrupt()
+                    print('(stopped speaking)')
+                except Exception:
+                    pass
+                continue
+
             # Wake/sleep gating (wake once, then stay awake until told to sleep)
             if args.wake:
                 low = user_text.lower()
@@ -367,8 +390,13 @@ def main():
                         idx = low.find(wake)
                         user_text = (user_text[:idx] + user_text[idx+len(args.wake):]).strip() or 'hello'
             print(f'You: {user_text}')
-            if user_text.strip().lower() in ('stop', 'quit', 'exit'):
+            # Also check stop after wake-stripping just in case
+            if _said_stop(user_text):
                 print('Bye!')
+                try:
+                    head.look_down()
+                except Exception:
+                    pass
                 break
 
             messages.append({'role': 'user', 'content': user_text})

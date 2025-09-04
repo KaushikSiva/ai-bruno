@@ -33,6 +33,9 @@ class TTSSpeaker:
         self._q: queue.Queue[str] = queue.Queue()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._interrupt = threading.Event()
+        self._current_play = None  # simpleaudio PlayObject
+        self._current_proc = None  # subprocess.Popen
 
         # Optional in-memory player
         try:
@@ -60,6 +63,31 @@ class TTSSpeaker:
         if len(t) > 800:
             t = t[:780] + '…'
         self._q.put(t)
+
+    def interrupt(self):
+        """Request immediate stop of any current playback and clear queue."""
+        try:
+            self._interrupt.set()
+            # Best-effort immediate stop
+            if self._current_play is not None:
+                try:
+                    self._current_play.stop()
+                except Exception:
+                    pass
+            if self._current_proc is not None:
+                try:
+                    self._current_proc.terminate()
+                except Exception:
+                    pass
+            # Drain any queued phrases
+            try:
+                while not self._q.empty():
+                    self._q.get_nowait()
+                    self._q.task_done()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def speak_sync(self, text: str) -> None:
         """Synthesize and play immediately on the calling (main) thread."""
@@ -109,6 +137,7 @@ class TTSSpeaker:
             except queue.Empty:
                 continue
             try:
+                self._interrupt.clear()
                 audio = self._synthesize_tts(text)
                 if audio:
                     self._play_audio(audio)
@@ -193,11 +222,18 @@ class TTSSpeaker:
                     audio_data = wf.readframes(wf.getnframes())
                     obj = self._sa.WaveObject(audio_data, wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
                     play = obj.play()
+                    self._current_play = play
                     # Busy wait but allow early stop
                     while play.is_playing():
-                        if self._stop.is_set():
+                        if self._stop.is_set() or self._interrupt.is_set():
+                            try:
+                                play.stop()
+                            except Exception:
+                                pass
                             break
                         time.sleep(0.05)
+            self._current_play = None
+            self._interrupt.clear()
             return
 
         # Fallback: write to temp WAV and invoke system player (aplay/ffplay) with max volume
@@ -211,7 +247,19 @@ class TTSSpeaker:
                 pass
             for cmd in (["aplay", "-q", tmp.name], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-volume", "100", tmp.name]):
                 try:
-                    subprocess.run(cmd, timeout=120)
+                    proc = subprocess.Popen(cmd)
+                    self._current_proc = proc
+                    # Poll with interrupt support
+                    while proc.poll() is None:
+                        if self._stop.is_set() or self._interrupt.is_set():
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
+                            break
+                        time.sleep(0.05)
+                    self._current_proc = None
+                    self._interrupt.clear()
                     return
                 except FileNotFoundError:
                     continue
