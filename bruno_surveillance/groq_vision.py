@@ -1,6 +1,6 @@
 import os
 import base64
-from typing import Optional
+from typing import Optional, Tuple, Dict, Any
 import requests
 
 from utils import LOG
@@ -75,3 +75,71 @@ def get_caption(image_path: str, prompt: Optional[str] = None) -> str:
     except Exception as e:
         return f'[groq vision caption failed] {e}'
 
+
+def detect_person_legs(image_path: str) -> Optional[Dict[str, int]]:
+    """
+    Ask Groq Vision to return a tight bounding box around a person's lower body
+    (hips through feet). Returns a pixel-space bbox dict {x,y,w,h} or None.
+    """
+    if not GROQ_API_KEY:
+        LOG.warning('Groq API key not set (GROQ_API_KEY)')
+        return None
+
+    # Use data URL for inline image
+    data_url = _file_to_data_url(image_path)
+    if not data_url:
+        return None
+
+    system = (
+        'You are a vision detector. Reply ONLY with minified JSON. '
+        'Detect the TIGHTEST bounding box around the lower body of the most prominent person '
+        '(hips through feet/ankles). If no person found, return {"bbox": null}. '
+        'JSON schema: {"bbox": {"x": int, "y": int, "w": int, "h": int}}.'
+    )
+    user_parts = [
+        {"type": "text", "text": "Return only JSON for lower-body bbox as specified."},
+        {"type": "input_image", "image_url": {"url": data_url}},
+    ]
+    payload = {
+        'model': GROQ_VISION_MODEL,
+        'messages': [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user_parts},
+        ],
+        'temperature': 0.0,
+        'max_tokens': 200,
+    }
+    headers = {
+        'Authorization': f'Bearer {GROQ_API_KEY}',
+        'Content-Type': 'application/json',
+    }
+    try:
+        url = f'{GROQ_API_BASE}/chat/completions'
+        r = requests.post(url, json=payload, headers=headers, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        txt = (data['choices'][0]['message']['content'] or '').strip()
+        # Strip possible code fences
+        if txt.startswith('```'):
+            idx = txt.find('\n')
+            if idx >= 0:
+                txt = txt[idx+1:]
+            if txt.endswith('```'):
+                txt = txt[:-3]
+            txt = txt.strip()
+        import json as _json
+        obj = _json.loads(txt)
+        bbox = obj.get('bbox') if isinstance(obj, dict) else None
+        if not bbox:
+            return None
+        try:
+            x = int(bbox.get('x', 0)); y = int(bbox.get('y', 0))
+            w = int(bbox.get('w', 0)); h = int(bbox.get('h', 0))
+            if w <= 0 or h <= 0:
+                return None
+            return {'x': x, 'y': y, 'w': w, 'h': h}
+        except Exception:
+            return None
+    except Exception as e:
+        LOG.warning(f'groq legs detect failed: {e}')
+        return None

@@ -53,12 +53,12 @@ class FaceFollower:
             self.speaker.start()
 
         self.board = Board() if HW_BOARD else None
-        # Pose for leg/hip landmarks
-        self.pose = mp.solutions.pose.Pose(model_complexity=0,
-                                           min_detection_confidence=0.5,
-                                           min_tracking_confidence=0.5)
+        # Groq Vision tracking state
         self.greeted_once = False
         self.next_groq_check = 0.0
+        self.next_track_at = 0.0
+        self.track_interval = 0.8  # seconds between Groq leg detections
+        self.last_bbox = None
 
         # Follow tuning
         # If your chassis turns the opposite way, set invert_yaw = False/True
@@ -153,29 +153,27 @@ class FaceFollower:
         except Exception:
             return False
 
-    def _lower_body_bbox(self, h, w, lmk) -> tuple | None:
-        """Compute a bbox around hips/knees/ankles from pose landmarks.
-        Returns (x, y, bw, bh) in pixels, or None if invalid.
-        """
-        idx = [23, 24, 25, 26, 27, 28]  # hips, knees, ankles
-        xs, ys = [], []
-        for i in idx:
-            lm = lmk.landmark[i]
-            if lm.visibility < 0.4:
-                continue
-            xs.append(int(lm.x * w)); ys.append(int(lm.y * h))
-        if len(xs) < 2 or len(ys) < 2:
+    def _groq_track_legs(self, frame_bgr) -> tuple | None:
+        """Call Groq to detect lower-body bbox and return (x,y,w,h) or None."""
+        try:
+            # Save a smaller frame to speed up IO
+            small = cv2.resize(frame_bgr, (480, int(frame_bgr.shape[0] * 480 / max(1, frame_bgr.shape[1]))))
+            probe = paths.debug / 'ff_track.jpg'
+            cv2.imwrite(str(probe), small)
+            try:
+                from bruno_surveillance.groq_vision import detect_person_legs
+            except Exception:
+                from groq_vision import detect_person_legs  # type: ignore
+            bbox = detect_person_legs(str(probe))
+            if not bbox:
+                return None
+            # bbox is in pixel space of the saved image; we can approximate same size as small
+            return (bbox['x'], bbox['y'], bbox['w'], bbox['h'])
+        except Exception:
             return None
-        x1, x2 = max(0, min(xs)), min(w-1, max(xs))
-        y1, y2 = max(0, min(ys)), min(h-1, max(ys))
-        # Ensure bbox has reasonable size (avoid zero-area)
-        bw, bh = max(1, x2 - x1), max(1, y2 - y1)
-        # Focus on lower third: pad upward slightly to include thighs
-        y1 = max(0, y1 - int(0.05 * h))
-        return (x1, y1, bw, bh)
 
     def run(self):
-        LOG.info('🤝 Face Follow: greet + nod + follow')
+        LOG.info('🦵 Leg Follow (Groq Vision): greet + nod + follow')
         if not self.camera.open():
             LOG.error('❌ Cannot open camera')
             return
@@ -186,8 +184,8 @@ class FaceFollower:
                 if last_frame is None:
                     time.sleep(self.loop_sleep); continue
                 h, w = last_frame.shape[:2]
+                # Greeter: lightweight caption probe
                 rgb = cv2.cvtColor(last_frame, cv2.COLOR_BGR2RGB)
-                res = self.pose.process(rgb)
 
                 # Greet once using Groq vision (every few seconds)
                 now = time.time()
@@ -196,17 +194,19 @@ class FaceFollower:
                     if self._groq_person_probe(last_frame):
                         self._greet()
 
-                if res.pose_landmarks:
-                    box = self._lower_body_bbox(h, w, res.pose_landmarks)
-                    if box is not None:
+                # Tracking via Groq at a lower rate; hold last bbox in between
+                now = time.time()
+                if now >= self.next_track_at:
+                    self.next_track_at = now + self.track_interval
+                    box = self._groq_track_legs(last_frame)
+                    if box is not None and box[2] > 0 and box[3] > 0:
+                        self.last_bbox = box
                         if not self.greeted_once:
                             self._greet()
-                        self._follow_step(w, h, box)
-                    else:
-                        self.motion.stop()
+                if self.last_bbox is not None:
+                    self._follow_step(w, h, self.last_bbox)
                 else:
                     self.motion.stop()
-                    # Do not reset greeted_once; greet only one time per session
 
                 time.sleep(self.loop_sleep)
         except KeyboardInterrupt:
