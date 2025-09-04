@@ -28,7 +28,7 @@ sys.path.append('/home/pi/MasterPi')
 import cv2
 import mediapipe as mp
 
-from utils import LOG
+from utils import LOG, paths
 from camera_shared import make_camera, read_or_reconnect
 from robot_motion import MecanumWrapper
 from ultrasonic import UltrasonicRGB
@@ -52,11 +52,13 @@ class FaceFollower:
             self.speaker.start()
 
         self.board = Board() if HW_BOARD else None
-        self.face = mp.solutions.face_detection.FaceDetection(min_detection_confidence=0.8)
-        self.last_seen = 0.0
-        self.greeted = False
+        self.face = mp.solutions.face_detection.FaceDetection(min_detection_confidence=0.75)
+        self.greeted_once = False
+        self.next_groq_check = 0.0
 
         # Follow tuning
+        # If your chassis turns the opposite way, set invert_yaw = True
+        self.invert_yaw = True  # hardware often maps sign opposite
         self.center_dead_px = 40
         self.area_near = 110000   # stop if larger than this (too close)
         self.area_target = 80000  # try to reach this area
@@ -64,7 +66,7 @@ class FaceFollower:
 
         # Timing
         self.loop_sleep = 0.03
-        self.greet_cooldown = 6.0
+        self.groq_interval = 2.0
 
     def _nod(self):
         if not self.board:
@@ -78,10 +80,9 @@ class FaceFollower:
             pass
 
     def _greet(self):
-        now = time.time()
-        if self.greeted and (now - self.last_seen) < self.greet_cooldown:
+        if self.greeted_once:
             return
-        self.greeted = True
+        self.greeted_once = True
         try:
             self._nod()
             if self.speaker:
@@ -103,9 +104,17 @@ class FaceFollower:
         # Heading control (discrete)
         dx = cx - (frame_w // 2)
         if dx < -self.center_dead_px:
-            self.motion.turn_left(0.12)
+            # face is to the left of center
+            if self.invert_yaw:
+                self.motion.turn_right(0.12)
+            else:
+                self.motion.turn_left(0.12)
         elif dx > self.center_dead_px:
-            self.motion.turn_right(0.12)
+            # face is to the right of center
+            if self.invert_yaw:
+                self.motion.turn_left(0.12)
+            else:
+                self.motion.turn_right(0.12)
 
         # Range control
         if area < self.area_far:
@@ -118,6 +127,26 @@ class FaceFollower:
                 self.motion.forward(0.1)
             else:
                 self.motion.stop()
+
+    def _groq_person_probe(self, bgr_frame) -> bool:
+        """Use groq_vision to decide if a person is present in this frame."""
+        try:
+            try:
+                # Try absolute import first (script run as module)
+                from bruno_surveillance import groq_vision as gv
+            except Exception:
+                from groq_vision import get_caption as _gc  # type: ignore
+                gv = None
+            # Downscale to speed up save/transfer
+            small = cv2.resize(bgr_frame, (480, int(bgr_frame.shape[0] * 480 / max(1, bgr_frame.shape[1]))))
+            probe = paths.debug / 'ff_groq_probe.jpg'
+            cv2.imwrite(str(probe), small)
+            caption = gv.get_caption(str(probe)) if gv else _gc(str(probe))
+            caps = caption.lower()
+            keywords = ("person", "people", "man", "woman", "boy", "girl", "human")
+            return any(k in caps for k in keywords)
+        except Exception:
+            return False
 
     def run(self):
         LOG.info('🤝 Face Follow: greet + nod + follow')
@@ -134,6 +163,13 @@ class FaceFollower:
                 rgb = cv2.cvtColor(last_frame, cv2.COLOR_BGR2RGB)
                 res = self.face.process(rgb)
 
+                # Greet once using Groq vision (every few seconds)
+                now = time.time()
+                if (not self.greeted_once) and (now >= self.next_groq_check):
+                    self.next_groq_check = now + self.groq_interval
+                    if self._groq_person_probe(last_frame):
+                        self._greet()
+
                 if res.detections:
                     # take the best face
                     det = max(res.detections, key=lambda d: d.score[0] if d.score else 0.0)
@@ -146,14 +182,15 @@ class FaceFollower:
                             int(bbox.width * w),
                             int(bbox.height * h),
                         )
-                        self._greet()
-                        self.last_seen = time.time()
+                        # If Groq already greeted, do not greet again
+                        if not self.greeted_once:
+                            self._greet()
                         self._follow_step(w, h, box)
                     else:
                         self.motion.stop()
                 else:
                     self.motion.stop()
-                    self.greeted = False  # next time will greet again
+                    # Do not reset greeted_once; greet only one time per session
 
                 time.sleep(self.loop_sleep)
         except KeyboardInterrupt:
@@ -178,4 +215,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
