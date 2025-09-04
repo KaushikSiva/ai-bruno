@@ -6,7 +6,6 @@ import threading
 import tempfile
 import subprocess
 from typing import Optional, Callable
-from contextlib import contextmanager
 
 import json
 import base64
@@ -17,58 +16,12 @@ import requests
 from utils import LOG
 
 
-@contextmanager
-def _suppress_alsa():
-    """Enhanced ALSA error suppression - redirects both stdout and stderr."""
-    try:
-        # Set environment variables to suppress ALSA verbosity
-        old_env = {}
-        alsa_env_vars = {
-            'ALSA_PCM_CARD': 'default',
-            'ALSA_PCM_DEVICE': '0',
-            'ALSA_LOG_LEVEL': '0'
-        }
-        
-        for key, value in alsa_env_vars.items():
-            old_env[key] = os.environ.get(key)
-            os.environ[key] = value
-        
-        # Redirect file descriptors
-        devnull_fd = os.open(os.devnull, os.O_WRONLY)
-        saved_stdout_fd = os.dup(1)
-        saved_stderr_fd = os.dup(2)
-        
-        # Redirect both stdout and stderr to suppress ALSA messages
-        os.dup2(devnull_fd, 1)
-        os.dup2(devnull_fd, 2)
-        os.close(devnull_fd)
-        
-        yield
-        
-    finally:
-        try:
-            # Restore file descriptors
-            os.dup2(saved_stdout_fd, 1)
-            os.dup2(saved_stderr_fd, 2)
-            os.close(saved_stdout_fd)
-            os.close(saved_stderr_fd)
-            
-            # Restore environment variables
-            for key, old_value in old_env.items():
-                if old_value is not None:
-                    os.environ[key] = old_value
-                elif key in os.environ:
-                    del os.environ[key]
-        except Exception:
-            pass
-
-
 class TTSSpeaker:
-    """Minimal TTS speaker using Inworld (voice Ashley)."""
+    """Minimal TTS speaker using Inworld (voice Dominus)."""
 
-    def __init__(self, enabled: bool, voice: str = 'Ashley'):
+    def __init__(self, enabled: bool, voice: str = 'Dominus'):
         self.enabled = bool(enabled)
-        self.voice = voice or 'Ashley'
+        self.voice = voice or 'Dominus'
 
         self.inworld_url = os.environ.get('INWORLD_TTS_URL', 'https://api.inworld.ai/tts/v1/voice:stream').strip()
         self.inworld_api_key = os.environ.get('INWORLD_API_KEY', '').strip()
@@ -195,7 +148,7 @@ class TTSSpeaker:
         LOG.info('🔇 TTS worker stopped')
 
     def _synthesize_tts(self, text: str) -> Optional[bytes]:
-        """Simple Inworld TTS: Ashley voice, fixed payload, stream chunks, return WAV bytes."""
+        """Simple Inworld TTS: Dominus voice, fixed payload, stream chunks, return WAV bytes."""
         if not self.inworld_api_key or requests is None:
             return None
         url = self.inworld_url or 'https://api.inworld.ai/tts/v1/voice:stream'
@@ -206,7 +159,7 @@ class TTSSpeaker:
         }
         payload = {
             'text': text,
-            'voiceId': self.voice or 'Ashley',
+            'voiceId': self.voice or 'Dominus',
             'modelId': 'inworld-tts-1',
             'audio_config': {
                 'audio_encoding': 'LINEAR16',
