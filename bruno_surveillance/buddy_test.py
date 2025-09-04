@@ -118,26 +118,86 @@ class SessionMemory:
         return len(self.pending_offers) > 0
         
     def get_offer_response(self, user_input: str) -> Optional[str]:
-        """Generate response if user is responding to a remembered offer."""
+        """Generate intelligent response if user is responding to a remembered offer."""
         if not self.has_pending_offer():
             return None
             
         user_lower = user_input.lower()
+        offer_type = self.pending_offers[0]
         
-        # Check for positive responses
-        if any(word in user_lower for word in ["yes", "yeah", "sure", "okay", "ok", "please", "go ahead"]):
-            # Use the first pending offer
-            offer_type = self.pending_offers[0]
-            response = self.greeting_manager.get_response_for_offer(offer_type)
-            self.pending_offers = []  # Clear offers after responding
-            return response or "Well, here I am! What did you have in mind?"
-            
-        # Check for negative responses
+        # Check for negative responses first
         if any(word in user_lower for word in ["no", "nah", "not now", "maybe later", "nope"]):
             response = "No worries! Maybe next time."
             self.pending_offers = []  # Clear offers
             return response
+        
+        # Check for positive responses
+        has_positive = any(word in user_lower for word in ["yes", "yeah", "sure", "okay", "ok", "please", "go ahead"])
+        
+        if has_positive or self._is_specific_request(user_input, offer_type):
+            # Handle specific requests intelligently
+            specific_response = self._handle_specific_offer_request(user_input, offer_type)
+            if specific_response:
+                self.pending_offers = []  # Clear offers after responding
+                return specific_response
             
+            # Fallback to generic response
+            response = self.greeting_manager.get_response_for_offer(offer_type)
+            self.pending_offers = []  # Clear offers after responding
+            return response or "Well, here I am! What did you have in mind?"
+            
+        return None
+    
+    def _is_specific_request(self, user_input: str, offer_type: str) -> bool:
+        """Check if user input contains specific requests related to the offer."""
+        user_lower = user_input.lower()
+        
+        # Language-specific keywords
+        if offer_type == "languages":
+            language_keywords = [
+                "japanese", "spanish", "french", "german", "italian", "chinese", "korean", 
+                "russian", "portuguese", "arabic", "hindi", "dutch", "swedish", "norwegian",
+                "japanese", "mandarin", "cantonese", "hebrew", "polish", "thai", "vietnamese"
+            ]
+            return any(lang in user_lower for lang in language_keywords)
+        
+        # Add more specific detections for other offer types
+        elif offer_type == "joke":
+            return any(word in user_lower for word in ["funny", "hilarious", "dad", "pun", "knock"])
+        elif offer_type == "fun_fact":
+            return any(word in user_lower for word in ["animal", "space", "science", "history", "nature"])
+        elif offer_type == "dance":
+            return any(word in user_lower for word in ["robot", "breakdance", "tango", "waltz", "hip"])
+        
+        return False
+    
+    def _handle_specific_offer_request(self, user_input: str, offer_type: str) -> Optional[str]:
+        """Handle specific requests within offer responses."""
+        user_lower = user_input.lower()
+        
+        if offer_type == "languages":
+            # Map language requests to actual translations of "Hello"
+            language_map = {
+                "japanese": "こんにちは (Konnichiwa) - That's hello in Japanese!",
+                "spanish": "¡Hola! - That's hello in Spanish!", 
+                "french": "Bonjour! - That's hello in French!",
+                "german": "Guten Tag! - That's hello in German!",
+                "italian": "Ciao! - That's hello in Italian!",
+                "chinese": "你好 (Nǐ hǎo) - That's hello in Chinese!",
+                "korean": "안녕하세요 (Annyeonghaseyo) - That's hello in Korean!",
+                "russian": "Здравствуйте (Zdravstvuyte) - That's hello in Russian!",
+                "portuguese": "Olá! - That's hello in Portuguese!",
+                "arabic": "مرحبا (Marhaba) - That's hello in Arabic!",
+                "hindi": "नमस्ते (Namaste) - That's hello in Hindi!",
+                "dutch": "Hallo! - That's hello in Dutch!",
+                "swedish": "Hej! - That's hello in Swedish!",
+                "hebrew": "שלום (Shalom) - That's hello in Hebrew!"
+            }
+            
+            for language, translation in language_map.items():
+                if language in user_lower:
+                    return translation
+        
         return None
 
 
@@ -594,8 +654,16 @@ def main():
                         pass
                 continue
 
-            # Regular conversation with LM Studio
-            messages.append({'role': 'user', 'content': user_text})
+            # Enhanced conversation with LM Studio (include context from pending offers)
+            context_enhanced_text = user_text
+            if session_memory.has_pending_offer():
+                offer_type = session_memory.pending_offers[0]
+                last_offer = session_memory.last_offer
+                context_enhanced_text = f"[Context: I just offered '{offer_type}' by saying '{last_offer}'] {user_text}"
+                # Clear the offer since we're handling it through LLM now
+                session_memory.pending_offers = []
+            
+            messages.append({'role': 'user', 'content': context_enhanced_text})
             try:
                 reply = _lmstudio_chat(messages)
             except Exception as e:
