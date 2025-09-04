@@ -25,7 +25,7 @@ import sys
 import time
 import json
 import argparse
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 import requests
 
@@ -59,13 +59,52 @@ def _lmstudio_chat(messages: List[Dict[str, str]],
     return (data['choices'][0]['message']['content'] or '').strip()
 
 
+def _groq_transcribe_wav(wav_bytes: bytes, model: Optional[str] = None, api_base: Optional[str] = None,
+                         api_key: Optional[str] = None) -> str:
+    """Send WAV bytes to Groq Whisper transcription and return text.
+    Expects OpenAI-compatible /audio/transcriptions endpoint.
+    """
+    api_base = (api_base or os.environ.get('GROQ_API_BASE', 'https://api.groq.com/openai/v1')).rstrip('/')
+    api_key = api_key or os.environ.get('GROQ_API_KEY')
+    model = model or os.environ.get('GROQ_STT_MODEL', 'whisper-large-v3')
+    if not api_key:
+        return ''
+    url = f"{api_base}/audio/transcriptions"
+    files = {
+        'file': ('audio.wav', wav_bytes, 'audio/wav'),
+    }
+    data = {
+        'model': model,
+        'response_format': 'json',
+        # 'language': 'en',  # optionally hint language
+    }
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+    }
+    try:
+        r = requests.post(url, headers=headers, data=data, files=files, timeout=120)
+        r.raise_for_status()
+        j = r.json()
+        # OpenAI-compatible responses include 'text'
+        txt = (j.get('text') or '').strip()
+        return txt
+    except Exception as e:
+        LOG.warning(f'Groq STT failed: {e}')
+        return ''
+
+
 class STT:
-    """Speech-to-text facade with Vosk (offline) fallback, else SpeechRecognition, else text."""
-    def __init__(self, device_index: int | None = None, vosk_model_path: str | None = None):
+    """Speech-to-text facade: Groq Whisper primary, Vosk fallback, then SR engines."""
+    def __init__(self, device_index: int | None = None, vosk_model_path: str | None = None, use_groq: Optional[bool] = None):
         self._recognizer = None
         self._mic = None
         self._device_index = device_index
         self._vosk_model = None
+        # Auto-enable Groq if key present unless explicitly disabled
+        if use_groq is None:
+            self._use_groq = bool(os.environ.get('GROQ_API_KEY'))
+        else:
+            self._use_groq = bool(use_groq)
         # Try Vosk model if provided
         if vosk_model_path:
             try:
@@ -98,6 +137,9 @@ class STT:
         except Exception:
             self._recognizer = None
             self._mic = None
+        # Announce STT backends
+        primary = 'Groq Whisper' if self._use_groq else ('Vosk' if self._vosk_model else 'SpeechRecognition')
+        LOG.info(f'STT primary: {primary} | fallback: ' + ('Vosk -> SR' if self._use_groq else ('SR' if self._vosk_model else 'SR (only)')))
 
     @property
     def available(self) -> bool:
@@ -113,7 +155,16 @@ class STT:
             with self._mic as source:
                 with _suppress_alsa():
                     audio = self._recognizer.listen(source, timeout=10, phrase_time_limit=12)
-            # Try Vosk (offline) first if available
+            # Try Groq Whisper first if selected
+            if self._use_groq:
+                try:
+                    wav = audio.get_wav_data(convert_rate=16000, convert_width=2)
+                    txt = _groq_transcribe_wav(wav)
+                    if txt:
+                        return txt
+                except Exception:
+                    pass
+            # Then Vosk (offline) if available
             if self._vosk_model is not None:
                 try:
                     # Convert to 16k mono 16-bit PCM
@@ -174,7 +225,7 @@ def main():
     p.add_argument('--system', default='You are Bruno, a concise, friendly assistant. Keep replies brief and helpful.')
     p.add_argument('--mic-index', type=int, default=None, help='SpeechRecognition microphone device index')
     p.add_argument('--list-mics', action='store_true', help='List available microphones and exit')
-    p.add_argument('--vosk-model', default=os.environ.get('VOSK_MODEL', None), help='Path to Vosk offline model')
+    p.add_argument('--vosk-model', default=os.environ.get('VOSK_MODEL', None), help='Path to Vosk offline model (fallback)')
     p.add_argument('--wake', default=None, help='Wake word; only respond when transcript contains this (e.g., "bruno")')
     args = p.parse_args()
 
@@ -197,7 +248,7 @@ def main():
             LOG.warning(f'TTS init failed: {e}')
             tts = None
 
-    stt = STT(device_index=args.mic_index, vosk_model_path=args.vosk_model)
+    stt = STT(device_index=args.mic_index, vosk_model_path=args.vosk_model, use_groq=None)
     if not stt.available:
         LOG.info('Mic unavailable; falling back to keyboard input.')
 
