@@ -6,6 +6,7 @@ import threading
 import tempfile
 import subprocess
 from typing import Optional, Callable
+from contextlib import contextmanager
 
 import json
 import base64
@@ -14,6 +15,66 @@ import wave
 import requests
 
 from utils import LOG
+
+
+@contextmanager
+def _suppress_alsa():
+    """Enhanced ALSA/JACK/Audio error suppression - redirects both stdout and stderr."""
+    try:
+        # Set environment variables to suppress all audio backend verbosity
+        old_env = {}
+        audio_env_vars = {
+            # ALSA suppression
+            'ALSA_PCM_CARD': 'default',
+            'ALSA_PCM_DEVICE': '0',
+            'ALSA_LOG_LEVEL': '0',
+            'ALSA_PLUGIN_DIR': '/usr/lib/alsa-lib',
+            # JACK suppression
+            'JACK_NO_START_SERVER': '1',
+            'JACK_NO_AUDIO_RESERVATION': '1',
+            'JACK_SILENCE_MESSAGES': '1',
+            # PulseAudio suppression  
+            'PULSE_RUNTIME_PATH': '/tmp',
+            'PULSE_SERVER': 'unix:/tmp/pulse-socket',
+            'PULSE_LATENCY_MSEC': '30',
+            # OSS suppression
+            'OSS_AUDIODEV': '/dev/null',
+            # General audio suppression
+            'SDL_AUDIODRIVER': 'alsa'
+        }
+        
+        for key, value in audio_env_vars.items():
+            old_env[key] = os.environ.get(key)
+            os.environ[key] = value
+        
+        # Redirect file descriptors
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        saved_stdout_fd = os.dup(1)
+        saved_stderr_fd = os.dup(2)
+        
+        # Redirect both stdout and stderr to suppress audio messages
+        os.dup2(devnull_fd, 1)
+        os.dup2(devnull_fd, 2)
+        os.close(devnull_fd)
+        
+        yield
+        
+    finally:
+        try:
+            # Restore file descriptors
+            os.dup2(saved_stdout_fd, 1)
+            os.dup2(saved_stderr_fd, 2)
+            os.close(saved_stdout_fd)
+            os.close(saved_stderr_fd)
+            
+            # Restore environment variables
+            for key, old_value in old_env.items():
+                if old_value is not None:
+                    os.environ[key] = old_value
+                elif key in os.environ:
+                    del os.environ[key]
+        except Exception:
+            pass
 
 
 class TTSSpeaker:
@@ -37,12 +98,13 @@ class TTSSpeaker:
         self._current_play = None  # simpleaudio PlayObject
         self._current_proc = None  # subprocess.Popen
 
-        # Optional in-memory player
-        try:
-            import simpleaudio  # type: ignore
-            self._sa = simpleaudio
-        except Exception:
-            self._sa = None
+        # Optional in-memory player (suppress audio backend errors during import)
+        with _suppress_alsa():
+            try:
+                import simpleaudio  # type: ignore
+                self._sa = simpleaudio
+            except Exception:
+                self._sa = None
 
     def start(self):
         if not self.enabled:
@@ -214,42 +276,55 @@ class TTSSpeaker:
             return None
 
     def _play_audio(self, wav_bytes: bytes):
-        # Prefer simpleaudio if available (in‑process playback)
+        # Prefer simpleaudio if available (suppress audio backend errors)
         if self._sa is not None:
             import wave
-            with io.BytesIO(wav_bytes) as bio:
-                with wave.open(bio, 'rb') as wf:
-                    audio_data = wf.readframes(wf.getnframes())
-                    obj = self._sa.WaveObject(audio_data, wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
-                    play = obj.play()
-                    self._current_play = play
-                    # Busy wait but allow early stop
-                    while play.is_playing():
-                        if self._stop.is_set() or self._interrupt.is_set():
-                            try:
-                                play.stop()
-                            except Exception:
-                                pass
-                            break
-                        time.sleep(0.05)
-            self._current_play = None
-            self._interrupt.clear()
-            return
+            with _suppress_alsa():
+                with io.BytesIO(wav_bytes) as bio:
+                    with wave.open(bio, 'rb') as wf:
+                        audio_data = wf.readframes(wf.getnframes())
+                        obj = self._sa.WaveObject(audio_data, wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
+                        play = obj.play()
+                        self._current_play = play
+                        # Busy wait but allow early stop
+                        while play.is_playing():
+                            if self._stop.is_set() or self._interrupt.is_set():
+                                try:
+                                    play.stop()
+                                except Exception:
+                                    pass
+                                break
+                            time.sleep(0.05)
+                self._current_play = None
+                self._interrupt.clear()
+                return
 
-        # Fallback: write to temp WAV and invoke system player (aplay/ffplay) with max volume
+        # Fallback: write to temp WAV and invoke system player with suppressed audio errors
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as tmp:
             tmp.write(wav_bytes)
             tmp.flush()
-            # Set system volume to max before playing
-            try:
-                subprocess.run(["amixer", "set", "Master", "100%"], capture_output=True, timeout=5)
-            except:
-                pass
-            for cmd in (["aplay", "-q", tmp.name], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-volume", "100", tmp.name]):
+            
+            # Set system volume to max (suppress ALSA/JACK errors)
+            with _suppress_alsa():
                 try:
-                    proc = subprocess.Popen(cmd)
-                    self._current_proc = proc
-                    # Poll with interrupt support
+                    subprocess.run(["amixer", "set", "Master", "100%"], capture_output=True, timeout=5)
+                except:
+                    pass
+            
+            # Try audio players with enhanced suppression
+            audio_commands = [
+                ["aplay", "-q", "-D", "default", tmp.name],  # ALSA default device
+                ["aplay", "-q", tmp.name],                   # ALSA auto-detect
+                ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-volume", "100", tmp.name]
+            ]
+            
+            for cmd in audio_commands:
+                try:
+                    with _suppress_alsa():
+                        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        self._current_proc = proc
+                    
+                    # Poll with interrupt support (no suppression for responsiveness)
                     while proc.poll() is None:
                         if self._stop.is_set() or self._interrupt.is_set():
                             try:

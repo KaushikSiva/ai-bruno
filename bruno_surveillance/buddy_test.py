@@ -246,19 +246,20 @@ class STT:
         else:
             self._use_groq = bool(use_groq)
         
-        # Initialize speech recognition - same as original
+        # Initialize speech recognition with enhanced ALSA suppression
         try:
             import speech_recognition as sr  # type: ignore
             self._recognizer = sr.Recognizer()
             try:
                 with _suppress_alsa():
                     self._mic = sr.Microphone(device_index=device_index, sample_rate=16000, chunk_size=1024)
-                with self._mic as source:
-                    self._recognizer.dynamic_energy_threshold = True
-                    self._recognizer.energy_threshold = int(os.environ.get('BUDDY_ENERGY_THRESHOLD', '200'))
-                    self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '0.6'))
-                    self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.3'))
-                    self._recognizer.adjust_for_ambient_noise(source, duration=0.8)
+                    # Microphone calibration with suppression
+                    with self._mic as source:
+                        self._recognizer.dynamic_energy_threshold = True
+                        self._recognizer.energy_threshold = int(os.environ.get('BUDDY_ENERGY_THRESHOLD', '200'))
+                        self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '0.6'))
+                        self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.3'))
+                        self._recognizer.adjust_for_ambient_noise(source, duration=0.8)
                 LOG.info(f'🎙️  Microphone ready')
             except Exception as e:
                 LOG.warning(f'No microphone: {e}')
@@ -316,17 +317,60 @@ import os as _os
 
 @contextmanager
 def _suppress_alsa():
-    """Temporarily redirect C-level stderr to /dev/null to silence ALSA/JACK noise."""
+    """Enhanced ALSA/JACK/Audio error suppression - redirects both stdout and stderr."""
     try:
+        # Set environment variables to suppress all audio backend verbosity
+        old_env = {}
+        audio_env_vars = {
+            # ALSA suppression
+            'ALSA_PCM_CARD': 'default',
+            'ALSA_PCM_DEVICE': '0',
+            'ALSA_LOG_LEVEL': '0',
+            'ALSA_PLUGIN_DIR': '/usr/lib/alsa-lib',
+            # JACK suppression
+            'JACK_NO_START_SERVER': '1',
+            'JACK_NO_AUDIO_RESERVATION': '1',
+            'JACK_SILENCE_MESSAGES': '1',
+            # PulseAudio suppression  
+            'PULSE_RUNTIME_PATH': '/tmp',
+            'PULSE_SERVER': 'unix:/tmp/pulse-socket',
+            'PULSE_LATENCY_MSEC': '30',
+            # OSS suppression
+            'OSS_AUDIODEV': '/dev/null',
+            # General audio suppression
+            'SDL_AUDIODRIVER': 'alsa'
+        }
+        
+        for key, value in audio_env_vars.items():
+            old_env[key] = _os.environ.get(key)
+            _os.environ[key] = value
+        
+        # Redirect file descriptors
         devnull_fd = _os.open(_os.devnull, _os.O_WRONLY)
+        saved_stdout_fd = _os.dup(1)
         saved_stderr_fd = _os.dup(2)
+        
+        # Redirect both stdout and stderr to suppress audio messages
+        _os.dup2(devnull_fd, 1)
         _os.dup2(devnull_fd, 2)
         _os.close(devnull_fd)
+        
         yield
+        
     finally:
         try:
+            # Restore file descriptors
+            _os.dup2(saved_stdout_fd, 1)
             _os.dup2(saved_stderr_fd, 2)
+            _os.close(saved_stdout_fd)
             _os.close(saved_stderr_fd)
+            
+            # Restore environment variables
+            for key, old_value in old_env.items():
+                if old_value is not None:
+                    _os.environ[key] = old_value
+                elif key in _os.environ:
+                    del _os.environ[key]
         except Exception:
             pass
 

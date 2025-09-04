@@ -5,6 +5,11 @@ numpy
 pandas
 # Audio playback (optional but recommended for TTS)
 simpleaudio
+# Speech recognition dependencies for buddy_test.py wake detection
+SpeechRecognition
+pyaudio
+# Optional for offline speech recognition
+vosk
 # Optional for captioner stub:
 # transformers
 # torch
