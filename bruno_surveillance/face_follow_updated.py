@@ -41,10 +41,10 @@ from utils import LOG
 from camera_shared import make_camera, read_or_reconnect
 from audio_tts import TTSSpeaker
 
-# Hardware imports with fallback
+# Hardware imports with fallback - using same pattern as color_tracking.py
 try:
+    from kinematics.arm_move_ik import *
     from common.ros_robot_controller_sdk import Board
-    from kinematics.arm_move_ik import ArmIK
     HW_AVAILABLE = True
     LOG.info("Hardware SDK loaded successfully")
 except ImportError as e:
@@ -171,8 +171,8 @@ class ArmScanner:
         self.is_scanning = False
         if self.arm_ik and HW_AVAILABLE:
             try:
-                # Return to optimal center position  
-                self.arm_ik.setPitchRangeMoving((0, 12, 20), 0, -90, 90, self.scan_speed)
+                # Return to optimal center position - use same pattern as color_tracking initMove
+                self.arm_ik.setPitchRangeMoving((0, 6, 18), 0, -90, 90, 1500)
                 LOG.info("🎯 Stopped scanning, returned to center")
             except Exception as e:
                 LOG.warning(f"Failed to return arm to center: {e}")
@@ -199,6 +199,7 @@ class ArmScanner:
         try:
             pos = self.scan_positions[self.current_position]
             if self.arm_ik and HW_AVAILABLE:
+                # Use exact same method as color_tracking.py line 84
                 self.arm_ik.setPitchRangeMoving(pos, 0, -90, 90, self.scan_speed)
                 LOG.info(f"🔍 Arm scanning position {self.current_position + 1}/{len(self.scan_positions)}: {pos}")
             elif not HW_AVAILABLE:
@@ -347,10 +348,10 @@ class CameraMountController:
             try:
                 self.horizontal_pulse = 1500
                 self.vertical_pulse = 1500
-                # Set both servos simultaneously like in color_tracking.py
+                # Set both servos simultaneously - exact same pattern as color_tracking.py
                 self.board.pwm_servo_set_position(0.1, [
-                    [self.vertical_servo_id, self.vertical_pulse],    # Servo 3 (up/down)
-                    [self.horizontal_servo_id, self.horizontal_pulse]  # Servo 6 (left/right)
+                    [3, int(self.vertical_pulse)],    # Servo 3 (up/down) - exact same as color_tracking
+                    [6, int(self.horizontal_pulse)]   # Servo 6 (left/right) - exact same as color_tracking
                 ])
                 LOG.info("📹 Camera centered (both axes)")
             except Exception as e:
@@ -503,10 +504,10 @@ class CameraMountController:
         # Apply servo movements if any adjustments were made
         if movement_made:
             try:
-                # Set both servos simultaneously like in color_tracking.py
+                # Set both servos simultaneously - exact same pattern as color_tracking.py line 277
                 self.board.pwm_servo_set_position(0.02, [
-                    [self.vertical_servo_id, self.vertical_pulse],      # Servo 3 (up/down)
-                    [self.horizontal_servo_id, self.horizontal_pulse]   # Servo 6 (left/right)
+                    [3, int(self.vertical_pulse)],      # Servo 3 (up/down) - exact same as color_tracking
+                    [6, int(self.horizontal_pulse)]     # Servo 6 (left/right) - exact same as color_tracking
                 ])
                 
                 h_dir = "RIGHT" if error_x > 0 else "LEFT"
@@ -836,11 +837,15 @@ class FaceFollowTest:
         self.invert_vertical = invert_vertical
         self.state = FaceFollowState.INITIALIZING
         
-        # Initialize hardware
-        self.board = Board() if HW_AVAILABLE else None
-        self.arm_ik = ArmIK() if HW_AVAILABLE else None
-        if self.arm_ik and self.board:
+        # Initialize hardware - using same pattern as color_tracking.py
+        if HW_AVAILABLE:
+            self.board = Board()
+            self.arm_ik = ArmIK()
             self.arm_ik.board = self.board
+            LOG.info("Hardware initialized: Board and ArmIK ready")
+        else:
+            self.board = None
+            self.arm_ik = None
         
         # Initialize camera
         self.camera = make_camera(camera_mode, retry_attempts=3, retry_delay=2.0)
@@ -1187,10 +1192,21 @@ class FaceFollowTest:
             LOG.error("❌ Cannot open camera")
             return
         
-        # Initialize system
+        # Initialize system - using same pattern as color_tracking.py
+        self._initialize_hardware()
         self.camera_controller.center_camera()
         self._change_state(FaceFollowState.WIDE_SCANNING, "System initialized")
         self.arm_scanner.start_scanning()
+    
+    def _initialize_hardware(self):
+        """Initialize hardware to known good state like color_tracking.py"""
+        if self.board and self.arm_ik and HW_AVAILABLE:
+            try:
+                # Initialize arm position - same as color_tracking.py initMove()
+                self.arm_ik.setPitchRangeMoving((0, 6, 18), 0, -90, 90, 1500)
+                LOG.info("🔧 Hardware initialized to known state")
+            except Exception as e:
+                LOG.warning(f"Hardware initialization failed: {e}")
         
         last_frame = None
         
