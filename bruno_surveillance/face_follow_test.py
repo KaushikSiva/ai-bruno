@@ -353,8 +353,10 @@ class FaceFollowTest:
     """
     
     def __init__(self, camera_mode: str = "external", audio_enabled: bool = False, 
-                 voice: str = "Dominus", scan_speed: float = 1.5, debug: bool = False):
+                 voice: str = "Dominus", scan_speed: float = 1.5, debug: bool = False,
+                 headless: bool = False):
         self.debug = debug
+        self.headless = headless
         self.state = FaceFollowState.INITIALIZING
         
         # Initialize hardware
@@ -388,7 +390,7 @@ class FaceFollowTest:
         self.loop_count = 0
         self.fps_counter = time.time()
         
-        LOG.info(f"🤖 Face Follow Test initialized (HW: {'✓' if HW_AVAILABLE else '✗'})")
+        LOG.info(f"🤖 Face Follow Test initialized (HW: {'✓' if HW_AVAILABLE else '✗'}, Display: {'Headless' if headless else 'GUI'})")
     
     def _change_state(self, new_state: FaceFollowState, reason: str = ""):
         """Change state and log the transition."""
@@ -562,6 +564,8 @@ class FaceFollowTest:
     def run(self):
         """Main execution loop."""
         LOG.info("🚀 Starting Face Follow Test")
+        if self.headless:
+            LOG.info("🖥️  Running in headless mode - no GUI display")
         
         if not self.camera.open():
             LOG.error("❌ Cannot open camera")
@@ -591,23 +595,24 @@ class FaceFollowTest:
                 else:
                     processed_frame = last_frame
                 
-                # Display frame with debug info
-                if processed_frame is not None:
+                # Display frame with debug info (only in GUI mode)
+                if processed_frame is not None and not self.headless:
                     display_frame = self._draw_debug_info(processed_frame)
                     
                     # Resize for display
                     display_frame = cv2.resize(display_frame, (640, 480))
                     cv2.imshow('Bruno Face Follow Test', display_frame)
                 
-                # Handle keyboard input
-                key = cv2.waitKey(1) & 0xFF
-                if key == 27:  # ESC key
-                    break
-                elif key == ord('r'):  # Reset
-                    LOG.info("Manual reset requested")
-                    self.greeted_this_session = False
-                    self._change_state(FaceFollowState.SCANNING, "Manual reset")
-                    self.arm_scanner.start_scanning()
+                # Handle keyboard input (GUI mode only)
+                if not self.headless:
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == 27:  # ESC key
+                        break
+                    elif key == ord('r'):  # Reset
+                        LOG.info("Manual reset requested")
+                        self.greeted_this_session = False
+                        self._change_state(FaceFollowState.SCANNING, "Manual reset")
+                        self.arm_scanner.start_scanning()
                 
                 # Small delay to prevent excessive CPU usage
                 time.sleep(0.03)
@@ -636,8 +641,9 @@ class FaceFollowTest:
             if self.speaker:
                 self.speaker.stop()
             
-            # Close OpenCV windows
-            cv2.destroyAllWindows()
+            # Close OpenCV windows (GUI mode only)
+            if not self.headless:
+                cv2.destroyAllWindows()
             
         except Exception as e:
             LOG.warning(f"Cleanup error: {e}")
@@ -657,6 +663,8 @@ def main():
                        help='Arm scanning speed in seconds (default: 1.5)')
     parser.add_argument('--debug', action='store_true',
                        help='Enable debug information display')
+    parser.add_argument('--headless', action='store_true',
+                       help='Run without GUI display (for headless systems)')
     
     args = parser.parse_args()
     
@@ -666,7 +674,8 @@ def main():
         audio_enabled=args.audio,
         voice=args.voice,
         scan_speed=args.scan_speed,
-        debug=args.debug
+        debug=args.debug,
+        headless=args.headless
     )
     
     face_follow.run()
