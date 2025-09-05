@@ -325,9 +325,10 @@ class CameraMountController:
         self.max_pulse = 1900
         self.step_size = 20
         
-        # Tracking parameters - improved responsiveness
-        self.center_dead_zone = 10  # pixels - smaller for tighter tracking
-        self.max_speed = 100  # max pulse change per update - faster response
+        # Tracking parameters - enhanced responsiveness and stability
+        self.center_dead_zone = 8   # pixels - very small for precise tracking
+        self.max_speed = 120         # max pulse change per update - very fast response
+        self.emergency_speed = 200   # emergency speed for rapid face recovery
         self.invert_horizontal = True   # Set to True if horizontal servo direction is backwards
         self.invert_vertical = False    # Set to True if vertical servo direction is backwards
         
@@ -337,6 +338,8 @@ class CameraMountController:
         self.prediction_factor = 0.3    # How much to predict ahead
         self.velocity_smoothing = 0.7   # Velocity smoothing factor
         self.lock_mode = False          # Enhanced lock mode when face is stable
+        self.emergency_mode = False     # Emergency mode for rapid recovery
+        self.last_emergency_time = 0    # Track emergency mode timing
         
     def center_camera(self):
         """Move camera to center position (both horizontal and vertical)."""
@@ -412,8 +415,26 @@ class CameraMountController:
         movement_magnitude = (vx**2 + vy**2)**0.5
         self._update_lock_mode(movement_magnitude)
         
-        # Choose target position based on lock mode and movement
-        if self.lock_mode or movement_magnitude < 10:
+        # Check for emergency mode (very fast movement or large error)
+        frame_center_x_temp = frame_width // 2
+        frame_center_y_temp = frame_height // 2
+        error_magnitude = ((face_center_x - frame_center_x_temp)**2 + (face_center_y - frame_center_y_temp)**2)**0.5
+        
+        current_time = time.time()
+        if error_magnitude > 100 or movement_magnitude > 200:  # Large error or very fast movement
+            if not self.emergency_mode:
+                self.emergency_mode = True
+                self.last_emergency_time = current_time
+                LOG.info("🚨 Emergency tracking mode ENGAGED - rapid face recovery")
+        elif self.emergency_mode and current_time - self.last_emergency_time > 2.0:
+            self.emergency_mode = False
+            LOG.info("🚨 Emergency tracking mode RELEASED")
+        
+        # Choose target position based on tracking mode
+        if self.emergency_mode:
+            # Use current position with emergency speed
+            target_x, target_y = face_center_x, face_center_y
+        elif self.lock_mode or movement_magnitude < 10:
             # Use current position for stable faces
             target_x, target_y = face_center_x, face_center_y
         else:
@@ -444,7 +465,9 @@ class CameraMountController:
             if self.invert_horizontal:
                 h_pulse_adjustment = -h_pulse_adjustment
                 
-            h_pulse_adjustment = max(-self.max_speed, min(self.max_speed, h_pulse_adjustment))
+            # Use emergency speed if in emergency mode
+            max_h_speed = self.emergency_speed if self.emergency_mode else self.max_speed
+            h_pulse_adjustment = max(-max_h_speed, min(max_h_speed, h_pulse_adjustment))
             new_h_pulse = self.horizontal_pulse + h_pulse_adjustment
             new_h_pulse = max(self.min_pulse, min(self.max_pulse, new_h_pulse))
             
@@ -461,7 +484,9 @@ class CameraMountController:
             if self.invert_vertical:
                 v_pulse_adjustment = -v_pulse_adjustment
                 
-            v_pulse_adjustment = max(-self.max_speed, min(self.max_speed, v_pulse_adjustment))
+            # Use emergency speed if in emergency mode
+            max_v_speed = self.emergency_speed if self.emergency_mode else self.max_speed
+            v_pulse_adjustment = max(-max_v_speed, min(max_v_speed, v_pulse_adjustment))
             new_v_pulse = self.vertical_pulse + v_pulse_adjustment
             new_v_pulse = max(self.min_pulse, min(self.max_pulse, new_v_pulse))
             
@@ -480,9 +505,16 @@ class CameraMountController:
                 
                 h_dir = "RIGHT" if error_x > 0 else "LEFT"
                 v_dir = "UP" if error_y < 0 else "DOWN"  # Y coordinates are inverted in images
-                lock_status = "🔒LOCKED" if self.lock_mode else "🎯TRACKING"
+                
+                if self.emergency_mode:
+                    status = "🚨EMERGENCY"
+                elif self.lock_mode:
+                    status = "🔒LOCKED"
+                else:
+                    status = "🎯TRACKING"
+                    
                 velocity_info = f"V:{movement_magnitude:.1f}px/s"
-                LOG.info(f"📹 {lock_status} {h_dir}/{v_dir}: H={self.horizontal_pulse}, V={self.vertical_pulse} {velocity_info}")
+                LOG.info(f"📹 {status} {h_dir}/{v_dir}: H={self.horizontal_pulse}, V={self.vertical_pulse} {velocity_info}")
                 return True
             except Exception as e:
                 LOG.warning(f"Camera tracking failed: {e}")
@@ -512,6 +544,11 @@ class FaceTracker:
         self.min_face_area = 1000    # Too far away
         self.max_face_area = 50000   # Too close
         self.target_face_area = 15000 # Optimal distance
+        
+        # Multi-modal tracking (backup when face not visible)
+        self.enable_backup_tracking = True
+        self.backup_tracker_initialized = False
+        self.last_person_region = None  # Store last known person region for backup tracking
         
         # Person memory and identification system
         self.tracked_person = None      # Current person being tracked
@@ -677,6 +714,57 @@ class FaceTracker:
         
         return (predicted_x, predicted_y)
     
+    def detect_person_backup(self, frame: np.ndarray) -> Optional[tuple]:
+        """
+        Backup person detection using simple motion/contour detection.
+        Returns (center_x, center_y) of detected person or None.
+        """
+        if not self.enable_backup_tracking:
+            return None
+            
+        try:
+            # Convert to grayscale for motion detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            if not self.backup_tracker_initialized:
+                self.background_subtractor = cv2.createBackgroundSubtractorMOG2(
+                    detectShadows=True, varThreshold=50
+                )
+                self.backup_tracker_initialized = True
+                return None
+            
+            # Apply background subtraction
+            fg_mask = self.background_subtractor.apply(gray)
+            
+            # Find contours of moving objects
+            contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
+                return None
+            
+            # Find the largest contour (likely to be a person)
+            largest_contour = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(largest_contour)
+            
+            # Filter out small movements (noise)
+            if area < 2000:  # Minimum area for person
+                return None
+            
+            # Get bounding rectangle and center
+            x, y, w, h = cv2.boundingRect(largest_contour)
+            center_x = x + w // 2
+            center_y = y + h // 2
+            
+            # Store for next iteration
+            self.last_person_region = (x, y, w, h, center_x, center_y)
+            
+            LOG.debug(f"👥 Backup tracking detected person: center=({center_x}, {center_y}), area={area}")
+            return (center_x, center_y)
+            
+        except Exception as e:
+            LOG.warning(f"Backup tracking failed: {e}")
+            return None
+    
     def draw_face_info(self, frame: np.ndarray, face: FaceInfo) -> np.ndarray:
         """Draw face detection information on frame."""
         # Draw bounding box
@@ -823,8 +911,8 @@ class FaceFollowTest:
             except Exception as e:
                 LOG.warning(f"Audio greeting failed: {e}")
     
-    def _handle_state_scanning(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
-        """Handle SCANNING state logic."""
+    def _handle_state_wide_scanning(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """Handle WIDE_SCANNING state - comprehensive room scanning."""
         if frame is None:
             return None
         
@@ -835,15 +923,67 @@ class FaceFollowTest:
             self.arm_scanner.stop_scanning()
             return self.face_tracker.draw_face_info(frame, face)
         
-        # Continue scanning - execute one position at a time
+        # Continue wide scanning - execute one position at a time
         self.arm_scanner.scan_step()
         
-        # No need to restart scanning as scan_step now loops continuously
-        
         # Add scanning indicator to frame with position info
-        scan_pos = f"{self.arm_scanner.current_position}/{len(self.arm_scanner.scan_positions)}"
-        cv2.putText(frame, f"SCANNING FOR FACES ({scan_pos})", (10, 30), 
+        current, total = self.arm_scanner.get_search_progress()
+        cv2.putText(frame, f"WIDE SCANNING FOR FACES ({current}/{total})", (10, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        
+        return frame
+    
+    def _handle_state_smart_search(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """Handle SMART_SEARCH state - local search around last known position."""
+        if frame is None:
+            return None
+        
+        # Look for faces while smart searching
+        face = self.face_tracker.detect_faces(frame)
+        if face:
+            self._change_state(FaceFollowState.FACE_DETECTED, "Face found during smart search")
+            self.arm_scanner.stop_smart_search()
+            return self.face_tracker.draw_face_info(frame, face)
+        
+        # Continue smart search
+        search_active = self.arm_scanner.smart_search_step()
+        if not search_active:
+            # Smart search complete, no face found - try person memory search
+            predicted_pos = self.face_tracker.get_predicted_person_location()
+            if predicted_pos:
+                self._change_state(FaceFollowState.PERSON_MEMORY_SEARCH, "Smart search complete, trying prediction")
+            else:
+                self._change_state(FaceFollowState.WIDE_SCANNING, "Smart search complete, returning to wide scan")
+                self.arm_scanner.start_scanning()
+        
+        # Add search indicator to frame
+        current, total = self.arm_scanner.get_search_progress()
+        cv2.putText(frame, f"SMART SEARCH ({current}/{total})", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+        
+        return frame
+    
+    def _handle_state_person_memory_search(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """Handle PERSON_MEMORY_SEARCH state - looking for known person."""
+        if frame is None:
+            return None
+        
+        # Look for faces during memory search
+        face = self.face_tracker.detect_faces(frame)
+        if face:
+            self._change_state(FaceFollowState.FACE_DETECTED, "Person found during memory search")
+            return self.face_tracker.draw_face_info(frame, face)
+        
+        # TODO: Implement person prediction-based search
+        # For now, fall back to wide scanning after a timeout
+        time_in_state = time.time() - self.last_state_change
+        if time_in_state > 3.0:  # 3 second timeout
+            self._change_state(FaceFollowState.WIDE_SCANNING, "Person memory search timeout")
+            self.arm_scanner.start_scanning()
+        
+        # Show memory search status
+        cv2.putText(frame, f"SEARCHING FOR KNOWN PERSON", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
         
         return frame
     
@@ -863,13 +1003,16 @@ class FaceFollowTest:
         self.camera_controller.track_face(face.center_x, face.center_y, frame.shape[1], frame.shape[0])
         self._greet_person()
         
-        # Transition to tracking
-        self._change_state(FaceFollowState.TRACKING, "Face confirmed, starting tracking")
+        # Transition to appropriate tracking mode based on camera lock status
+        if self.camera_controller.lock_mode:
+            self._change_state(FaceFollowState.LOCKED_TRACKING, "Face confirmed, locked tracking")
+        else:
+            self._change_state(FaceFollowState.PREDICTIVE_TRACKING, "Face confirmed, predictive tracking")
         
         return self.face_tracker.draw_face_info(frame, face)
     
-    def _handle_state_tracking(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
-        """Handle TRACKING state logic."""
+    def _handle_state_locked_tracking(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """Handle LOCKED_TRACKING state - high-confidence face lock."""
         if frame is None:
             self._change_state(FaceFollowState.FACE_LOST, "Lost camera feed")
             return None
@@ -878,8 +1021,71 @@ class FaceFollowTest:
         
         if self.face_tracker.update_tracking_state(face):
             if face:
-                # Active face tracking with enhanced fixation (both X and Y axes)
+                # Active locked tracking with enhanced stability
                 tracking_moved = self.camera_controller.track_face(face.center_x, face.center_y, frame.shape[1], frame.shape[0])
+                
+                # Check if we should switch to predictive tracking
+                if not self.camera_controller.lock_mode:
+                    self._change_state(FaceFollowState.PREDICTIVE_TRACKING, "Face moving fast, switching to predictive")
+                    return self.face_tracker.draw_face_info(frame, face)
+                
+                # Distance feedback
+                distance_cat = self.face_tracker.get_distance_category(face)
+                distance_color = {
+                    "too_far": (0, 0, 255),    # Red
+                    "good": (0, 255, 0),       # Green  
+                    "too_close": (255, 0, 0)   # Blue
+                }.get(distance_cat, (128, 128, 128))
+                
+                # Show locked tracking status
+                tracking_status = "🔒LOCKED" if not tracking_moved else "🔒ADJUSTING"
+                cv2.putText(frame, f"{tracking_status} - Distance: {distance_cat}", 
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, distance_color, 2)
+                
+                return self.face_tracker.draw_face_info(frame, face)
+            else:
+                # Face temporarily lost but still in grace period - try backup tracking
+                backup_pos = self.face_tracker.detect_person_backup(frame)
+                if backup_pos:
+                    backup_x, backup_y = backup_pos
+                    self.camera_controller.track_face(backup_x, backup_y, frame.shape[1], frame.shape[0])
+                    cv2.putText(frame, "🔒LOCKED - Backup tracking active", 
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                    # Draw backup tracking indicator
+                    cv2.circle(frame, (backup_x, backup_y), 8, (255, 255, 0), 2)
+                else:
+                    cv2.putText(frame, "🔒LOCKED - Face temporarily lost", 
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                return frame
+        else:
+            # Face lost for too long - start smart search
+            last_face_pos = self.face_tracker.last_face
+            if last_face_pos:
+                # Convert face position to arm position (simplified mapping)
+                arm_pos = (0, 12, 20)  # Default center, TODO: improve mapping
+                self.arm_scanner.start_smart_search(arm_pos)
+                self._change_state(FaceFollowState.SMART_SEARCH, "Locked face lost, starting smart search")
+            else:
+                self._change_state(FaceFollowState.FACE_LOST, "Locked face lost, no position info")
+            return frame
+    
+    def _handle_state_predictive_tracking(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """Handle PREDICTIVE_TRACKING state - following moving face with prediction."""
+        if frame is None:
+            self._change_state(FaceFollowState.FACE_LOST, "Lost camera feed")
+            return None
+        
+        face = self.face_tracker.detect_faces(frame)
+        
+        if self.face_tracker.update_tracking_state(face):
+            if face:
+                # Active predictive tracking
+                tracking_moved = self.camera_controller.track_face(face.center_x, face.center_y, frame.shape[1], frame.shape[0])
+                
+                # Check if we should switch to locked tracking
+                if self.camera_controller.lock_mode:
+                    self._change_state(FaceFollowState.LOCKED_TRACKING, "Face stable, switching to locked")
+                    return self.face_tracker.draw_face_info(frame, face)
                 
                 # Distance feedback
                 distance_cat = self.face_tracker.get_distance_category(face)
@@ -889,20 +1095,37 @@ class FaceFollowTest:
                     "too_close": (255, 0, 0)   # Blue
                 }.get(distance_cat, (128, 128, 128))
                 
-                # Show tracking status
-                tracking_status = "FIXATED" if not tracking_moved else "ADJUSTING"
-                cv2.putText(frame, f"TRACKING {tracking_status} - Distance: {distance_cat}", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, distance_color, 2)
+                # Show predictive tracking status
+                tracking_status = "🎯PREDICTING" if not tracking_moved else "🎯FOLLOWING"
+                velocity_info = f"V:{self.camera_controller.face_velocity[0]:.1f},{self.camera_controller.face_velocity[1]:.1f}"
+                cv2.putText(frame, f"{tracking_status} - {distance_cat} ({velocity_info})", 
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, distance_color, 2)
                 
                 return self.face_tracker.draw_face_info(frame, face)
             else:
-                # Face temporarily lost but still in grace period
-                cv2.putText(frame, "TRACKING - Face temporarily lost", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                # Face temporarily lost but still in grace period - try backup tracking
+                backup_pos = self.face_tracker.detect_person_backup(frame)
+                if backup_pos:
+                    backup_x, backup_y = backup_pos
+                    self.camera_controller.track_face(backup_x, backup_y, frame.shape[1], frame.shape[0])
+                    cv2.putText(frame, "🎯PREDICTING - Backup tracking active", 
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                    # Draw backup tracking indicator
+                    cv2.circle(frame, (backup_x, backup_y), 8, (255, 255, 0), 2)
+                else:
+                    cv2.putText(frame, "🎯PREDICTING - Face temporarily lost", 
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 return frame
         else:
-            # Face lost for too long
-            self._change_state(FaceFollowState.FACE_LOST, "Face lost for too long")
+            # Face lost for too long - start smart search
+            last_face_pos = self.face_tracker.last_face
+            if last_face_pos:
+                # Convert face position to arm position (simplified mapping)
+                arm_pos = (0, 12, 20)  # Default center, TODO: improve mapping
+                self.arm_scanner.start_smart_search(arm_pos)
+                self._change_state(FaceFollowState.SMART_SEARCH, "Predictive face lost, starting smart search")
+            else:
+                self._change_state(FaceFollowState.FACE_LOST, "Predictive face lost, no position info")
             return frame
     
     def _handle_state_face_lost(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
@@ -918,7 +1141,7 @@ class FaceFollowTest:
             return self.face_tracker.draw_face_info(frame, face)
         
         # No face found, return to comprehensive scanning
-        self._change_state(FaceFollowState.SCANNING, "Starting comprehensive scan cycle")
+        self._change_state(FaceFollowState.WIDE_SCANNING, "Starting comprehensive scan cycle")
         self.arm_scanner.start_scanning()
         
         cv2.putText(frame, "FACE LOST - Returning to scan", 
@@ -970,13 +1193,19 @@ class FaceFollowTest:
                 # Read camera frame
                 last_frame = read_or_reconnect(self.camera, last_frame)
                 
-                # State machine processing
-                if self.state == FaceFollowState.SCANNING:
-                    processed_frame = self._handle_state_scanning(last_frame)
+                # Enhanced state machine processing
+                if self.state == FaceFollowState.WIDE_SCANNING:
+                    processed_frame = self._handle_state_wide_scanning(last_frame)
                 elif self.state == FaceFollowState.FACE_DETECTED:
                     processed_frame = self._handle_state_face_detected(last_frame)
-                elif self.state == FaceFollowState.TRACKING:
-                    processed_frame = self._handle_state_tracking(last_frame)
+                elif self.state == FaceFollowState.LOCKED_TRACKING:
+                    processed_frame = self._handle_state_locked_tracking(last_frame)
+                elif self.state == FaceFollowState.PREDICTIVE_TRACKING:
+                    processed_frame = self._handle_state_predictive_tracking(last_frame)
+                elif self.state == FaceFollowState.SMART_SEARCH:
+                    processed_frame = self._handle_state_smart_search(last_frame)
+                elif self.state == FaceFollowState.PERSON_MEMORY_SEARCH:
+                    processed_frame = self._handle_state_person_memory_search(last_frame)
                 elif self.state == FaceFollowState.FACE_LOST:
                     processed_frame = self._handle_state_face_lost(last_frame)
                 else:
@@ -998,7 +1227,8 @@ class FaceFollowTest:
                     elif key == ord('r'):  # Reset
                         LOG.info("Manual reset requested")
                         self.greeted_this_session = False
-                        self._change_state(FaceFollowState.SCANNING, "Manual reset")
+                        self._change_state(FaceFollowState.WIDE_SCANNING, "Manual reset")
+                        self.arm_scanner.stop_smart_search()
                         self.arm_scanner.start_scanning()
                 
                 # Small delay to prevent excessive CPU usage - reduced for better responsiveness
