@@ -91,6 +91,8 @@ class ArmScanner:
         self.scan_positions = []
         self.scan_speed = 1200  # milliseconds for movement - faster scanning
         self.is_scanning = False
+        self.last_move_time = 0  # Track when last movement started
+        self.position_hold_time = 1.5  # seconds to hold each position for face detection
         
         # Define scanning pattern based on HiWonder docs
         self._init_scan_positions()
@@ -130,7 +132,8 @@ class ArmScanner:
         """Start the scanning sequence."""
         self.is_scanning = True
         self.current_position = 0
-        LOG.info("🔍 Starting arm scanning for faces")
+        self.last_move_time = 0  # Reset timing
+        LOG.info("🔍 Starting comprehensive arm scanning for faces")
     
     def stop_scanning(self):
         """Stop scanning and return to center position."""
@@ -145,29 +148,40 @@ class ArmScanner:
     
     def scan_step(self) -> bool:
         """
-        Execute one step of the scanning sequence.
-        Returns True if scanning is complete, False if continuing.
+        Execute one step of the scanning sequence with proper timing.
+        Returns True if a position was executed, False if waiting.
         """
-        if not self.is_scanning or not HW_AVAILABLE:
-            return True
+        if not self.is_scanning:
+            return False
+        
+        current_time = time.time()
+        
+        # Check if enough time has passed since last movement
+        if current_time - self.last_move_time < self.position_hold_time:
+            return False  # Still holding current position
             
         if self.current_position >= len(self.scan_positions):
-            # Completed one full scan cycle
+            # Completed one full scan cycle, restart from beginning
             self.current_position = 0
-            return True
+            LOG.info("🔄 Completed scan cycle, restarting...")
         
         try:
             pos = self.scan_positions[self.current_position]
-            if self.arm_ik:
+            if self.arm_ik and HW_AVAILABLE:
                 self.arm_ik.setPitchRangeMoving(pos, 0, -90, 90, self.scan_speed)
-                LOG.debug(f"Arm moving to position {self.current_position}: {pos}")
+                LOG.info(f"🔍 Arm scanning position {self.current_position + 1}/{len(self.scan_positions)}: {pos}")
+            elif not HW_AVAILABLE:
+                LOG.debug(f"[SIMULATED] Arm moving to position {self.current_position + 1}: {pos}")
             
             self.current_position += 1
-            return False
+            self.last_move_time = current_time
+            return True
             
         except Exception as e:
             LOG.error(f"Arm movement failed: {e}")
-            return True
+            self.current_position += 1  # Skip this position and continue
+            self.last_move_time = current_time
+            return False
     
     def set_scan_speed(self, speed_ms: int):
         """Set scanning speed in milliseconds."""
@@ -191,6 +205,7 @@ class CameraMountController:
         # Tracking parameters - improved responsiveness
         self.center_dead_zone = 15  # pixels - smaller for better tracking
         self.max_speed = 80  # max pulse change per update - faster response
+        self.invert_direction = True  # Set to True if servo direction is backwards
         
     def center_camera(self):
         """Move camera to center position."""
@@ -217,10 +232,15 @@ class CameraMountController:
         if abs(error) < self.center_dead_zone:
             return False
         
-        # Calculate pulse adjustment with improved responsiveness
-        # Negative error = face is left of center, servo should move left (decrease pulse)
-        # Positive error = face is right of center, servo should move right (increase pulse)
-        pulse_adjustment = int(error * 0.8)  # Increased scale factor for better responsiveness
+        # Calculate pulse adjustment with proper direction handling
+        # When face moves right (positive error), camera should move right to follow
+        # When face moves left (negative error), camera should move left to follow
+        pulse_adjustment = int(error * 0.8)  # Scale factor for responsiveness
+        
+        # Apply direction inversion if needed (some servos are wired backwards)
+        if self.invert_direction:
+            pulse_adjustment = -pulse_adjustment
+            
         pulse_adjustment = max(-self.max_speed, min(self.max_speed, pulse_adjustment))
         
         new_pulse = self.current_pulse + pulse_adjustment
@@ -230,7 +250,8 @@ class CameraMountController:
             try:
                 self.current_pulse = new_pulse
                 self.board.pwm_servo_set_position(0.02, [[self.camera_servo_id, self.current_pulse]])  # Faster update rate
-                LOG.debug(f"Camera tracking: pulse={self.current_pulse}, error={error}")
+                direction = "RIGHT" if pulse_adjustment > 0 else "LEFT"
+                LOG.info(f"📹 Camera tracking {direction}: pulse={self.current_pulse}, error={error}, adj={pulse_adjustment}")
                 return True
             except Exception as e:
                 LOG.warning(f"Camera tracking failed: {e}")
@@ -358,9 +379,10 @@ class FaceFollowTest:
     
     def __init__(self, camera_mode: str = "external", audio_enabled: bool = False, 
                  voice: str = "Dominus", scan_speed: float = 1.5, debug: bool = False,
-                 headless: bool = False):
+                 headless: bool = False, invert_camera: bool = True):
         self.debug = debug
         self.headless = headless
+        self.invert_camera = invert_camera
         self.state = FaceFollowState.INITIALIZING
         
         # Initialize hardware
@@ -380,6 +402,7 @@ class FaceFollowTest:
         # Initialize subsystems
         self.arm_scanner = ArmScanner(self.board, self.arm_ik)
         self.camera_controller = CameraMountController(self.board)
+        self.camera_controller.invert_direction = self.invert_camera  # Apply camera direction setting
         self.face_tracker = FaceTracker()
         
         # Configuration
@@ -454,11 +477,10 @@ class FaceFollowTest:
             self.arm_scanner.stop_scanning()
             return self.face_tracker.draw_face_info(frame, face)
         
-        # Continue scanning
-        scan_complete = self.arm_scanner.scan_step()
-        if scan_complete:
-            # Start new scan cycle
-            self.arm_scanner.start_scanning()
+        # Continue scanning - execute one position at a time
+        self.arm_scanner.scan_step()
+        
+        # No need to restart scanning as scan_step now loops continuously
         
         # Add scanning indicator to frame with position info
         scan_pos = f"{self.arm_scanner.current_position}/{len(self.arm_scanner.scan_positions)}"
@@ -498,8 +520,8 @@ class FaceFollowTest:
         
         if self.face_tracker.update_tracking_state(face):
             if face:
-                # Active tracking
-                self.camera_controller.track_face(face.center_x, frame.shape[1])
+                # Active face tracking with enhanced fixation
+                tracking_moved = self.camera_controller.track_face(face.center_x, frame.shape[1])
                 
                 # Distance feedback
                 distance_cat = self.face_tracker.get_distance_category(face)
@@ -509,7 +531,9 @@ class FaceFollowTest:
                     "too_close": (255, 0, 0)   # Blue
                 }.get(distance_cat, (128, 128, 128))
                 
-                cv2.putText(frame, f"TRACKING - Distance: {distance_cat}", 
+                # Show tracking status
+                tracking_status = "FIXATED" if not tracking_moved else "ADJUSTING"
+                cv2.putText(frame, f"TRACKING {tracking_status} - Distance: {distance_cat}", 
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, distance_color, 2)
                 
                 return self.face_tracker.draw_face_info(frame, face)
@@ -670,6 +694,8 @@ def main():
                        help='Enable debug information display')
     parser.add_argument('--headless', action='store_true',
                        help='Run without GUI display (for headless systems)')
+    parser.add_argument('--invert-camera', action='store_true', default=True,
+                       help='Invert camera servo direction (default: True)')
     
     args = parser.parse_args()
     
@@ -680,7 +706,8 @@ def main():
         voice=args.voice,
         scan_speed=args.scan_speed,
         debug=args.debug,
-        headless=args.headless
+        headless=args.headless,
+        invert_camera=args.invert_camera
     )
     
     face_follow.run()
