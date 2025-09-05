@@ -55,12 +55,15 @@ except ImportError as e:
 
 
 class FaceFollowState(Enum):
-    """State machine states for face following behavior."""
+    """Enhanced state machine states for intelligent face following behavior."""
     INITIALIZING = "initializing"
-    SCANNING = "scanning" 
+    WIDE_SCANNING = "wide_scanning"         # Full room systematic scan
     FACE_DETECTED = "face_detected"
-    TRACKING = "tracking"
-    FACE_LOST = "face_lost"
+    LOCKED_TRACKING = "locked_tracking"     # High-confidence face lock
+    PREDICTIVE_TRACKING = "predictive_tracking"  # Following moving face with prediction
+    SMART_SEARCH = "smart_search"           # Local search around last known position  
+    PERSON_MEMORY_SEARCH = "person_memory_search"  # Looking for known person
+    FACE_LOST = "face_lost"                # Temporary loss, quick recovery
     ERROR = "error"
 
 
@@ -93,6 +96,12 @@ class ArmScanner:
         self.is_scanning = False
         self.last_move_time = 0  # Track when last movement started
         self.position_hold_time = 1.5  # seconds to hold each position for face detection
+        
+        # Smart search system
+        self.smart_search_positions = []
+        self.smart_search_center = None  # (x, y, z) center for local search
+        self.smart_search_radius = 5     # degrees for local search
+        self.is_smart_searching = False
         
         # Define scanning pattern based on HiWonder docs
         self._init_scan_positions()
@@ -208,6 +217,90 @@ class ArmScanner:
     def set_scan_speed(self, speed_ms: int):
         """Set scanning speed in milliseconds."""
         self.scan_speed = max(500, min(3000, speed_ms))  # Clamp between 0.5-3 seconds
+    
+    def start_smart_search(self, center_position: tuple) -> None:
+        """Start smart search around a specific position."""
+        self.smart_search_center = center_position
+        self.is_smart_searching = True
+        self.is_scanning = False  # Stop regular scanning
+        
+        # Generate smart search positions around the center
+        x_center, y_center, z_center = center_position
+        self.smart_search_positions = []
+        
+        # Create a local search pattern around the center
+        offsets = [
+            (0, 0, 0),           # Center
+            (-3, 0, 2), (3, 0, 2),    # Left/Right
+            (0, -3, 2), (0, 3, -2),   # Forward/Back
+            (-3, -3, 3), (3, -3, 3),  # Diagonal
+            (-3, 3, -3), (3, 3, -3),
+            (0, 0, 5), (0, 0, -5),    # Up/Down variations
+        ]
+        
+        for dx, dy, dz in offsets:
+            search_pos = (
+                max(-30, min(30, x_center + dx)),    # Clamp X
+                max(5, min(35, y_center + dy)),      # Clamp Y  
+                max(5, min(40, z_center + dz))       # Clamp Z
+            )
+            self.smart_search_positions.append(search_pos)
+        
+        self.current_position = 0
+        self.last_move_time = 0
+        LOG.info(f"🎯 Starting smart search around {center_position} with {len(self.smart_search_positions)} positions")
+    
+    def smart_search_step(self) -> bool:
+        """
+        Execute one step of smart search.
+        Returns True if search position was executed, False if search complete.
+        """
+        if not self.is_smart_searching or not self.smart_search_positions:
+            return False
+        
+        current_time = time.time()
+        
+        # Check if enough time has passed since last movement
+        if current_time - self.last_move_time < 0.8:  # Faster search
+            return False
+        
+        if self.current_position >= len(self.smart_search_positions):
+            # Search complete
+            LOG.info("🎯 Smart search complete, no face found")
+            self.is_smart_searching = False
+            return False
+        
+        try:
+            pos = self.smart_search_positions[self.current_position]
+            if self.arm_ik and HW_AVAILABLE:
+                self.arm_ik.setPitchRangeMoving(pos, 0, -90, 90, 800)  # Faster search
+                LOG.info(f"🔍 Smart search position {self.current_position + 1}/{len(self.smart_search_positions)}: {pos}")
+            elif not HW_AVAILABLE:
+                LOG.debug(f"[SIMULATED] Smart search to position {self.current_position + 1}: {pos}")
+            
+            self.current_position += 1
+            self.last_move_time = current_time
+            return True
+            
+        except Exception as e:
+            LOG.error(f"Smart search movement failed: {e}")
+            self.current_position += 1
+            return False
+    
+    def stop_smart_search(self):
+        """Stop smart search and return to normal scanning."""
+        if self.is_smart_searching:
+            self.is_smart_searching = False
+            LOG.info("🎯 Smart search stopped")
+    
+    def get_search_progress(self) -> tuple:
+        """Get current search progress (current, total)."""
+        if self.is_smart_searching:
+            return (self.current_position, len(self.smart_search_positions))
+        elif self.is_scanning:
+            return (self.current_position, len(self.scan_positions))
+        else:
+            return (0, 0)
 
 
 class CameraMountController:
@@ -867,7 +960,7 @@ class FaceFollowTest:
         
         # Initialize system
         self.camera_controller.center_camera()
-        self._change_state(FaceFollowState.SCANNING, "System initialized")
+        self._change_state(FaceFollowState.WIDE_SCANNING, "System initialized")
         self.arm_scanner.start_scanning()
         
         last_frame = None
