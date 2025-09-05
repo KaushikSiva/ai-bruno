@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # coding: utf-8
 """
-Bruno Leg Follow (standalone)
+Bruno Face Follow (standalone)
 
 Behavior
 - Opens camera (builtin/external via --mode)
-- Detects a person via MediaPipe Pose and tracks lower body (legs/hips)
-- Greets once (Groq Vision caption or first pose) with nod + "Hello"
-- Follows from behind by centering on legs and maintaining distance
+- Detects a face via MediaPipe FaceDetection and tracks its center
+- Greets once (first confirmed face) with nod + optional "Hello"
+- Follows by centering on the face and maintaining distance
 - Uses ultrasonic to avoid getting too close
 
 Run
@@ -16,8 +16,7 @@ Run
 Dependencies
 - mediapipe, opencv-python
 - MasterPi SDK for motion & ultrasonic
-- bruno_surveillance/groq_vision.py for caption probe
-- bruno_surveillance/audio_tts.py for TTS (Inworld)
+- bruno_surveillance/audio_tts.py for TTS (optional)
 """
 import os
 import sys
@@ -53,25 +52,27 @@ class FaceFollower:
             self.speaker.start()
 
         self.board = Board() if HW_BOARD else None
-        # Groq Vision tracking state
+        # Greeting + tracking state
         self.greeted_once = False
-        self.next_groq_check = 0.0
-        self.next_track_at = 0.0
-        self.track_interval = 0.8  # seconds between Groq leg detections
-        self.last_bbox = None
+        self.last_bbox = None  # (x, y, w, h) for last detected face
+
+        # Face detector (MediaPipe)
+        self.face_detection = mp.solutions.face_detection.FaceDetection(
+            min_detection_confidence=0.75
+        )
 
         # Follow tuning
         # If your chassis turns the opposite way, set invert_yaw = False/True
         self.invert_yaw = True  # many chassis map yaw inverted; flip if needed
-        self.center_dead_px = 50
-        # Area proxy based on lower-body bounding box; tune for your FOV
-        self.area_near = 130000   # stop if larger than this (too close)
-        self.area_target = 90000  # try to reach this area
-        self.area_far = 50000     # move forward if below this
+        self.center_dead_px = 30  # face needs tighter centering than legs
+        # Use relative area thresholds (ratio of face box to frame area)
+        # These values work across common resolutions (e.g., 640x480)
+        self.area_ratio_far = 0.010   # <1.0% of frame: move forward
+        self.area_ratio_target = 0.030  # ~3% of frame: good distance target
+        self.area_ratio_near = 0.060  # >6% of frame: too close, stop
 
         # Timing
         self.loop_sleep = 0.03
-        self.groq_interval = 2.0
 
     def _nod(self):
         if not self.board:
@@ -105,75 +106,67 @@ class FaceFollower:
         cx = x + w // 2
         cy = y + h // 2
         area = w * h
+        frame_area = max(1, frame_w * frame_h)
+        area_ratio = area / frame_area
 
         # Heading control (discrete)
         dx = cx - (frame_w // 2)
         if dx < -self.center_dead_px:
-            # face is to the left of center
+            # target is to the left of center
             if self.invert_yaw:
                 self.motion.turn_right(0.12)
             else:
                 self.motion.turn_left(0.12)
         elif dx > self.center_dead_px:
-            # face is to the right of center
+            # target is to the right of center
             if self.invert_yaw:
                 self.motion.turn_left(0.12)
             else:
                 self.motion.turn_right(0.12)
 
-        # Range control
-        if area < self.area_far:
+        # Range control (based on relative face size)
+        if area_ratio < self.area_ratio_far:
             self.motion.forward(0.2)
-        elif area > self.area_near:
+        elif area_ratio > self.area_ratio_near:
             self.motion.stop()
         else:
             # in band: gentle forward if still below target
-            if area < self.area_target:
+            if area_ratio < self.area_ratio_target:
                 self.motion.forward(0.1)
             else:
                 self.motion.stop()
 
-    def _groq_person_probe(self, bgr_frame) -> bool:
-        """Use groq_vision to decide if a person is present in this frame."""
+    def _detect_face_bbox(self, frame_bgr) -> tuple | None:
+        """Detect the most confident face and return pixel bbox (x,y,w,h) or None."""
         try:
-            try:
-                # Try absolute import first (script run as module)
-                from bruno_surveillance import groq_vision as gv
-            except Exception:
-                from groq_vision import get_caption as _gc  # type: ignore
-                gv = None
-            # Downscale to speed up save/transfer
-            small = cv2.resize(bgr_frame, (480, int(bgr_frame.shape[0] * 480 / max(1, bgr_frame.shape[1]))))
-            probe = paths.debug / 'ff_groq_probe.jpg'
-            cv2.imwrite(str(probe), small)
-            caption = gv.get_caption(str(probe)) if gv else _gc(str(probe))
-            caps = caption.lower()
-            keywords = ("person", "people", "man", "woman", "boy", "girl", "human")
-            return any(k in caps for k in keywords)
-        except Exception:
-            return False
-
-    def _groq_track_legs(self, frame_bgr) -> tuple | None:
-        """Call Groq to detect lower-body bbox and return (x,y,w,h) or None."""
-        try:
-            # Save a smaller frame to speed up IO
-            small = cv2.resize(frame_bgr, (480, int(frame_bgr.shape[0] * 480 / max(1, frame_bgr.shape[1]))))
-            probe = paths.debug / 'ff_track.jpg'
-            cv2.imwrite(str(probe), small)
-            try:
-                from bruno_surveillance.groq_vision import detect_person_legs
-            except Exception:
-                from groq_vision import detect_person_legs  # type: ignore
-            bbox = detect_person_legs(str(probe))
-            if not bbox:
+            h, w = frame_bgr.shape[:2]
+            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            res = self.face_detection.process(rgb)
+            if not res.detections:
                 return None
-            # bbox is in pixel space of the saved image; we can approximate same size as small
-            return (bbox['x'], bbox['y'], bbox['w'], bbox['h'])
+            best = None
+            best_area = 0
+            for det in res.detections:
+                score = det.score[0] if det.score else 0.0
+                if score < 0.7:
+                    continue
+                rb = det.location_data.relative_bounding_box
+                x = max(0, int(rb.xmin * w))
+                y = max(0, int(rb.ymin * h))
+                ww = max(0, int(rb.width * w))
+                hh = max(0, int(rb.height * h))
+                if ww <= 0 or hh <= 0:
+                    continue
+                area = ww * hh
+                if area > best_area:
+                    best = (x, y, ww, hh)
+                    best_area = area
+            return best
         except Exception:
             return None
 
     def run(self):
-        LOG.info('🦵 Leg Follow (Groq Vision): greet + nod + follow')
+        LOG.info('🙂 Face Follow (MediaPipe): greet + nod + follow')
         if not self.camera.open():
             LOG.error('❌ Cannot open camera')
             return
@@ -184,25 +177,12 @@ class FaceFollower:
                 if last_frame is None:
                     time.sleep(self.loop_sleep); continue
                 h, w = last_frame.shape[:2]
-                # Greeter: lightweight caption probe
-                rgb = cv2.cvtColor(last_frame, cv2.COLOR_BGR2RGB)
-
-                # Greet once using Groq vision (every few seconds)
-                now = time.time()
-                if (not self.greeted_once) and (now >= self.next_groq_check):
-                    self.next_groq_check = now + self.groq_interval
-                    if self._groq_person_probe(last_frame):
+                # Detect face every loop; keep last bbox for smoothing when transiently lost
+                box = self._detect_face_bbox(last_frame)
+                if box is not None and box[2] > 0 and box[3] > 0:
+                    self.last_bbox = box
+                    if not self.greeted_once:
                         self._greet()
-
-                # Tracking via Groq at a lower rate; hold last bbox in between
-                now = time.time()
-                if now >= self.next_track_at:
-                    self.next_track_at = now + self.track_interval
-                    box = self._groq_track_legs(last_frame)
-                    if box is not None and box[2] > 0 and box[3] > 0:
-                        self.last_bbox = box
-                        if not self.greeted_once:
-                            self._greet()
                 if self.last_bbox is not None:
                     self._follow_step(w, h, self.last_bbox)
                 else:
