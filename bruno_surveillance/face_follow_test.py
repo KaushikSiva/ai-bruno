@@ -98,20 +98,42 @@ class ArmScanner:
         self._init_scan_positions()
     
     def _init_scan_positions(self):
-        """Initialize the scanning positions for comprehensive face scanning."""
-        # Enhanced scanning pattern with wider coverage and better arm extension
+        """Initialize comprehensive scanning positions for full room and height coverage."""
+        # COMPREHENSIVE SCANNING PATTERN - Floor to Ceiling, Sitting to Standing
         base_positions = [
-            (0, 10, 25),    # Center/initial - extended reach
-            (15, 10, 25),   # Right - wider angle
-            (15, 18, 15),   # Right-high - full extension
-            (15, 25, 8),    # Right-far - maximum reach
-            (0, 25, 8),     # Center-far - maximum forward reach
-            (-15, 25, 8),   # Left-far - maximum reach
-            (-15, 18, 15),  # Left-high - full extension  
-            (-15, 10, 25),  # Left - wider angle
-            (-8, 15, 20),   # Left-mid - intermediate position
-            (8, 15, 20),    # Right-mid - intermediate position
-            (0, 10, 25),    # Back to center
+            # Layer 1: Sitting persons and low positions (Z: 30-35cm)
+            (0, 8, 35),     # Center-sitting level
+            (20, 8, 35),    # Right-sitting
+            (20, 15, 30),   # Right-sitting extended
+            (0, 20, 30),    # Center-sitting far
+            (-20, 15, 30),  # Left-sitting extended
+            (-20, 8, 35),   # Left-sitting
+            
+            # Layer 2: Standing persons - torso level (Z: 15-25cm)
+            (0, 10, 25),    # Center-standing torso
+            (25, 10, 25),   # Right-standing wide
+            (25, 20, 15),   # Right-standing extended
+            (25, 30, 8),    # Right-maximum reach
+            (0, 30, 8),     # Center-maximum forward
+            (-25, 30, 8),   # Left-maximum reach
+            (-25, 20, 15),  # Left-standing extended
+            (-25, 10, 25),  # Left-standing wide
+            
+            # Layer 3: Head level for standing persons (Z: 5-15cm)
+            (0, 12, 15),    # Center-head level
+            (20, 12, 15),   # Right-head level
+            (20, 25, 8),    # Right-head extended
+            (-20, 25, 8),   # Left-head extended
+            (-20, 12, 15),  # Left-head level
+            
+            # Layer 4: Intermediate sweep positions for coverage gaps
+            (15, 18, 20),   # Right-mid sweep
+            (-15, 18, 20),  # Left-mid sweep
+            (10, 22, 12),   # Right-diagonal
+            (-10, 22, 12),  # Left-diagonal
+            
+            # Return to optimal center position
+            (0, 12, 20),    # Center-optimal
         ]
         
         # Add intermediate positions for smoother scanning
@@ -140,8 +162,8 @@ class ArmScanner:
         self.is_scanning = False
         if self.arm_ik and HW_AVAILABLE:
             try:
-                # Return to center position  
-                self.arm_ik.setPitchRangeMoving((0, 10, 25), 0, -90, 90, self.scan_speed)
+                # Return to optimal center position  
+                self.arm_ik.setPitchRangeMoving((0, 12, 20), 0, -90, 90, self.scan_speed)
                 LOG.info("🎯 Stopped scanning, returned to center")
             except Exception as e:
                 LOG.warning(f"Failed to return arm to center: {e}")
@@ -196,62 +218,178 @@ class CameraMountController:
     
     def __init__(self, board: Optional[Board] = None):
         self.board = board
-        self.camera_servo_id = 6  # Horizontal camera servo from face_recognition.py
-        self.current_pulse = 1500  # Center position
+        
+        # Servo configuration based on color_tracking.py pattern
+        self.horizontal_servo_id = 6  # Left/right camera movement
+        self.vertical_servo_id = 3    # Up/down camera movement
+        
+        # Current positions
+        self.horizontal_pulse = 1500  # Center position
+        self.vertical_pulse = 1500    # Center position
+        
+        # Servo limits
         self.min_pulse = 1100
         self.max_pulse = 1900
         self.step_size = 20
         
         # Tracking parameters - improved responsiveness
-        self.center_dead_zone = 15  # pixels - smaller for better tracking
-        self.max_speed = 80  # max pulse change per update - faster response
-        self.invert_direction = True  # Set to True if servo direction is backwards
+        self.center_dead_zone = 10  # pixels - smaller for tighter tracking
+        self.max_speed = 100  # max pulse change per update - faster response
+        self.invert_horizontal = True   # Set to True if horizontal servo direction is backwards
+        self.invert_vertical = False    # Set to True if vertical servo direction is backwards
+        
+        # Predictive tracking system
+        self.last_face_pos = None       # (x, y, timestamp)
+        self.face_velocity = (0, 0)     # (vx, vy) pixels per second
+        self.prediction_factor = 0.3    # How much to predict ahead
+        self.velocity_smoothing = 0.7   # Velocity smoothing factor
+        self.lock_mode = False          # Enhanced lock mode when face is stable
         
     def center_camera(self):
-        """Move camera to center position."""
+        """Move camera to center position (both horizontal and vertical)."""
         if self.board and HW_AVAILABLE:
             try:
-                self.current_pulse = 1500
-                self.board.pwm_servo_set_position(0.1, [[self.camera_servo_id, self.current_pulse]])
-                LOG.debug("Camera centered")
+                self.horizontal_pulse = 1500
+                self.vertical_pulse = 1500
+                # Set both servos simultaneously like in color_tracking.py
+                self.board.pwm_servo_set_position(0.1, [
+                    [self.vertical_servo_id, self.vertical_pulse],    # Servo 3 (up/down)
+                    [self.horizontal_servo_id, self.horizontal_pulse]  # Servo 6 (left/right)
+                ])
+                LOG.info("📹 Camera centered (both axes)")
             except Exception as e:
                 LOG.warning(f"Failed to center camera: {e}")
     
-    def track_face(self, face_center_x: int, frame_width: int) -> bool:
+    def _update_face_velocity(self, face_x: int, face_y: int) -> None:
+        """Update face velocity estimation for predictive tracking."""
+        current_time = time.time()
+        
+        if self.last_face_pos is not None:
+            last_x, last_y, last_time = self.last_face_pos
+            dt = current_time - last_time
+            
+            if dt > 0:  # Avoid division by zero
+                # Calculate instantaneous velocity
+                vx = (face_x - last_x) / dt
+                vy = (face_y - last_y) / dt
+                
+                # Apply velocity smoothing
+                self.face_velocity = (
+                    self.velocity_smoothing * self.face_velocity[0] + (1 - self.velocity_smoothing) * vx,
+                    self.velocity_smoothing * self.face_velocity[1] + (1 - self.velocity_smoothing) * vy
+                )
+        
+        self.last_face_pos = (face_x, face_y, current_time)
+    
+    def _get_predicted_position(self, face_x: int, face_y: int) -> tuple:
+        """Get predicted face position based on current velocity."""
+        vx, vy = self.face_velocity
+        
+        # Predict future position based on velocity
+        predicted_x = face_x + (vx * self.prediction_factor)
+        predicted_y = face_y + (vy * self.prediction_factor)
+        
+        return int(predicted_x), int(predicted_y)
+    
+    def _update_lock_mode(self, movement_magnitude: float) -> None:
+        """Update enhanced lock mode based on face movement."""
+        # Enter lock mode if face is relatively stable
+        if movement_magnitude < 20:  # pixels per second
+            if not self.lock_mode:
+                self.lock_mode = True
+                LOG.info("🔒 Enhanced lock mode ENGAGED - face stable")
+        else:
+            if self.lock_mode:
+                self.lock_mode = False
+                LOG.info("🔓 Enhanced lock mode RELEASED - face moving fast")
+    
+    def track_face(self, face_center_x: int, face_center_y: int, frame_width: int, frame_height: int) -> bool:
         """
-        Move camera to track face horizontally.
+        Move camera to track face both horizontally and vertically with predictive tracking.
         Returns True if tracking movement was made.
         """
         if not self.board or not HW_AVAILABLE:
             return False
+        
+        # Update velocity estimation for predictive tracking
+        self._update_face_velocity(face_center_x, face_center_y)
+        
+        # Use predicted position for tracking if face is moving
+        vx, vy = self.face_velocity
+        movement_magnitude = (vx**2 + vy**2)**0.5
+        self._update_lock_mode(movement_magnitude)
+        
+        # Choose target position based on lock mode and movement
+        if self.lock_mode or movement_magnitude < 10:
+            # Use current position for stable faces
+            target_x, target_y = face_center_x, face_center_y
+        else:
+            # Use predicted position for moving faces
+            target_x, target_y = self._get_predicted_position(face_center_x, face_center_y)
             
-        frame_center = frame_width // 2
-        error = face_center_x - frame_center
+        # Calculate errors for both axes using target position
+        frame_center_x = frame_width // 2
+        frame_center_y = frame_height // 2
+        error_x = target_x - frame_center_x
+        error_y = target_y - frame_center_y
         
-        # Dead zone check
-        if abs(error) < self.center_dead_zone:
-            return False
+        # Check if face is within dead zone for both axes
+        x_in_deadzone = abs(error_x) < self.center_dead_zone
+        y_in_deadzone = abs(error_y) < self.center_dead_zone
         
-        # Calculate pulse adjustment with proper direction handling
-        # When face moves right (positive error), camera should move right to follow
-        # When face moves left (negative error), camera should move left to follow
-        pulse_adjustment = int(error * 0.8)  # Scale factor for responsiveness
+        if x_in_deadzone and y_in_deadzone:
+            return False  # No movement needed
         
-        # Apply direction inversion if needed (some servos are wired backwards)
-        if self.invert_direction:
-            pulse_adjustment = -pulse_adjustment
+        movement_made = False
+        
+        # Horizontal tracking
+        if not x_in_deadzone:
+            # Calculate horizontal pulse adjustment
+            h_pulse_adjustment = int(error_x * 0.8)  # Scale factor for responsiveness
             
-        pulse_adjustment = max(-self.max_speed, min(self.max_speed, pulse_adjustment))
+            # Apply direction inversion if needed
+            if self.invert_horizontal:
+                h_pulse_adjustment = -h_pulse_adjustment
+                
+            h_pulse_adjustment = max(-self.max_speed, min(self.max_speed, h_pulse_adjustment))
+            new_h_pulse = self.horizontal_pulse + h_pulse_adjustment
+            new_h_pulse = max(self.min_pulse, min(self.max_pulse, new_h_pulse))
+            
+            if new_h_pulse != self.horizontal_pulse:
+                self.horizontal_pulse = new_h_pulse
+                movement_made = True
         
-        new_pulse = self.current_pulse + pulse_adjustment
-        new_pulse = max(self.min_pulse, min(self.max_pulse, new_pulse))
+        # Vertical tracking  
+        if not y_in_deadzone:
+            # Calculate vertical pulse adjustment
+            v_pulse_adjustment = int(error_y * 0.8)  # Scale factor for responsiveness
+            
+            # Apply direction inversion if needed
+            if self.invert_vertical:
+                v_pulse_adjustment = -v_pulse_adjustment
+                
+            v_pulse_adjustment = max(-self.max_speed, min(self.max_speed, v_pulse_adjustment))
+            new_v_pulse = self.vertical_pulse + v_pulse_adjustment
+            new_v_pulse = max(self.min_pulse, min(self.max_pulse, new_v_pulse))
+            
+            if new_v_pulse != self.vertical_pulse:
+                self.vertical_pulse = new_v_pulse
+                movement_made = True
         
-        if new_pulse != self.current_pulse:
+        # Apply servo movements if any adjustments were made
+        if movement_made:
             try:
-                self.current_pulse = new_pulse
-                self.board.pwm_servo_set_position(0.02, [[self.camera_servo_id, self.current_pulse]])  # Faster update rate
-                direction = "RIGHT" if pulse_adjustment > 0 else "LEFT"
-                LOG.info(f"📹 Camera tracking {direction}: pulse={self.current_pulse}, error={error}, adj={pulse_adjustment}")
+                # Set both servos simultaneously like in color_tracking.py
+                self.board.pwm_servo_set_position(0.02, [
+                    [self.vertical_servo_id, self.vertical_pulse],      # Servo 3 (up/down)
+                    [self.horizontal_servo_id, self.horizontal_pulse]   # Servo 6 (left/right)
+                ])
+                
+                h_dir = "RIGHT" if error_x > 0 else "LEFT"
+                v_dir = "UP" if error_y < 0 else "DOWN"  # Y coordinates are inverted in images
+                lock_status = "🔒LOCKED" if self.lock_mode else "🎯TRACKING"
+                velocity_info = f"V:{movement_magnitude:.1f}px/s"
+                LOG.info(f"📹 {lock_status} {h_dir}/{v_dir}: H={self.horizontal_pulse}, V={self.vertical_pulse} {velocity_info}")
                 return True
             except Exception as e:
                 LOG.warning(f"Camera tracking failed: {e}")
@@ -281,10 +419,19 @@ class FaceTracker:
         self.min_face_area = 1000    # Too far away
         self.max_face_area = 50000   # Too close
         self.target_face_area = 15000 # Optimal distance
+        
+        # Person memory and identification system
+        self.tracked_person = None      # Current person being tracked
+        self.person_features = None     # Feature vector of current person
+        self.person_confidence = 0.0    # Confidence in current person match
+        self.person_history = []        # History of person positions
+        self.max_history_length = 10   # Keep last 10 positions
+        self.identification_threshold = 0.7  # Minimum confidence for person match
+        self.feature_memory_time = 30.0      # Remember person for 30 seconds after loss
     
     def detect_faces(self, frame: np.ndarray) -> Optional[FaceInfo]:
         """
-        Detect faces in frame and return the best face info.
+        Detect faces in frame and return the best face info with person tracking.
         Based on face_recognition.py MediaPipe integration.
         """
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -324,7 +471,118 @@ class FaceTracker:
                         best_face = face_info
                         best_score = face_info.area
         
+        # Update person tracking with the best face found
+        if best_face is not None:
+            self._update_person_tracking(best_face, frame)
+        
         return best_face
+    
+    def _extract_face_features(self, frame: np.ndarray, face: FaceInfo) -> Optional[np.ndarray]:
+        """Extract simple features from face for identification (basic implementation)."""
+        try:
+            # Extract face region
+            face_region = frame[face.y:face.y+face.height, face.x:face.x+face.width]
+            if face_region.size == 0:
+                return None
+            
+            # Simple feature extraction - normalized face area, aspect ratio, center position
+            aspect_ratio = face.width / max(face.height, 1)
+            center_x_norm = face.center_x / max(frame.shape[1], 1)
+            center_y_norm = face.center_y / max(frame.shape[0], 1)
+            area_norm = face.area / max(frame.shape[0] * frame.shape[1], 1)
+            
+            # Create feature vector
+            features = np.array([
+                aspect_ratio,
+                center_x_norm,
+                center_y_norm,
+                area_norm,
+                face.confidence
+            ], dtype=np.float32)
+            
+            return features
+        except Exception:
+            return None
+    
+    def _calculate_person_similarity(self, features1: np.ndarray, features2: np.ndarray) -> float:
+        """Calculate similarity between two feature vectors."""
+        try:
+            # Simple cosine similarity
+            dot_product = np.dot(features1, features2)
+            norm1 = np.linalg.norm(features1)
+            norm2 = np.linalg.norm(features2)
+            
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            
+            similarity = dot_product / (norm1 * norm2)
+            return max(0.0, similarity)  # Clamp to [0, 1]
+        except Exception:
+            return 0.0
+    
+    def _update_person_tracking(self, face: Optional[FaceInfo], frame: np.ndarray) -> bool:
+        """Update person identification and tracking."""
+        if face is None:
+            return False
+        
+        # Extract features from current face
+        current_features = self._extract_face_features(frame, face)
+        if current_features is None:
+            return False
+        
+        # If we have a tracked person, check if this is the same person
+        if self.person_features is not None:
+            similarity = self._calculate_person_similarity(self.person_features, current_features)
+            
+            if similarity >= self.identification_threshold:
+                # Same person - update confidence and features
+                self.person_confidence = min(1.0, self.person_confidence + 0.1)
+                # Blend features for stability
+                self.person_features = 0.7 * self.person_features + 0.3 * current_features
+                
+                # Update position history
+                self.person_history.append((face.center_x, face.center_y, time.time()))
+                if len(self.person_history) > self.max_history_length:
+                    self.person_history.pop(0)
+                
+                LOG.debug(f"👤 Same person confirmed: confidence={self.person_confidence:.2f}, similarity={similarity:.2f}")
+                return True
+            else:
+                # Different person or lost track
+                LOG.info(f"👤 Person changed: similarity={similarity:.2f} < {self.identification_threshold}")
+        
+        # New person or first detection
+        self.person_features = current_features
+        self.person_confidence = face.confidence
+        self.person_history = [(face.center_x, face.center_y, time.time())]
+        self.tracked_person = f"person_{int(time.time())}"  # Simple ID
+        
+        LOG.info(f"👤 New person detected: ID={self.tracked_person}, confidence={self.person_confidence:.2f}")
+        return True
+    
+    def get_predicted_person_location(self) -> Optional[tuple]:
+        """Predict where the person might be based on movement history."""
+        if len(self.person_history) < 2:
+            return None
+        
+        # Use last two positions to predict movement
+        (x1, y1, t1) = self.person_history[-2]
+        (x2, y2, t2) = self.person_history[-1]
+        
+        dt = t2 - t1
+        if dt <= 0:
+            return None
+        
+        # Calculate velocity
+        vx = (x2 - x1) / dt
+        vy = (y2 - y1) / dt
+        
+        # Predict position 0.5 seconds ahead
+        prediction_time = 0.5
+        predicted_x = int(x2 + vx * prediction_time)
+        predicted_y = int(y2 + vy * prediction_time)
+        
+        return (predicted_x, predicted_y)
     
     def draw_face_info(self, frame: np.ndarray, face: FaceInfo) -> np.ndarray:
         """Draw face detection information on frame."""
@@ -336,10 +594,15 @@ class FaceTracker:
         # Draw center point
         cv2.circle(frame, (face.center_x, face.center_y), 5, (0, 255, 0), -1)
         
-        # Draw face info text
-        info_text = f"Area: {face.area}, Conf: {face.confidence:.2f}"
-        cv2.putText(frame, info_text, (face.x, face.y - 10), 
+        # Draw face info text with person identification
+        person_id = self.tracked_person if self.tracked_person else "Unknown"
+        info_text = f"ID: {person_id}, Conf: {self.person_confidence:.2f}"
+        cv2.putText(frame, info_text, (face.x, face.y - 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        
+        area_text = f"Area: {face.area}"
+        cv2.putText(frame, area_text, (face.x, face.y - 10), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
         
         return frame
     
@@ -379,10 +642,11 @@ class FaceFollowTest:
     
     def __init__(self, camera_mode: str = "external", audio_enabled: bool = False, 
                  voice: str = "Dominus", scan_speed: float = 1.5, debug: bool = False,
-                 headless: bool = False, invert_camera: bool = True):
+                 headless: bool = False, invert_camera: bool = True, invert_vertical: bool = False):
         self.debug = debug
         self.headless = headless
         self.invert_camera = invert_camera
+        self.invert_vertical = invert_vertical
         self.state = FaceFollowState.INITIALIZING
         
         # Initialize hardware
@@ -402,7 +666,8 @@ class FaceFollowTest:
         # Initialize subsystems
         self.arm_scanner = ArmScanner(self.board, self.arm_ik)
         self.camera_controller = CameraMountController(self.board)
-        self.camera_controller.invert_direction = self.invert_camera  # Apply camera direction setting
+        self.camera_controller.invert_horizontal = self.invert_camera  # Apply camera direction settings
+        self.camera_controller.invert_vertical = self.invert_vertical
         self.face_tracker = FaceTracker()
         
         # Configuration
@@ -502,7 +767,7 @@ class FaceFollowTest:
             return frame
         
         # Center camera on face and greet
-        self.camera_controller.track_face(face.center_x, frame.shape[1])
+        self.camera_controller.track_face(face.center_x, face.center_y, frame.shape[1], frame.shape[0])
         self._greet_person()
         
         # Transition to tracking
@@ -520,8 +785,8 @@ class FaceFollowTest:
         
         if self.face_tracker.update_tracking_state(face):
             if face:
-                # Active face tracking with enhanced fixation
-                tracking_moved = self.camera_controller.track_face(face.center_x, frame.shape[1])
+                # Active face tracking with enhanced fixation (both X and Y axes)
+                tracking_moved = self.camera_controller.track_face(face.center_x, face.center_y, frame.shape[1], frame.shape[0])
                 
                 # Distance feedback
                 distance_cat = self.face_tracker.get_distance_category(face)
@@ -695,7 +960,9 @@ def main():
     parser.add_argument('--headless', action='store_true',
                        help='Run without GUI display (for headless systems)')
     parser.add_argument('--invert-camera', action='store_true', default=True,
-                       help='Invert camera servo direction (default: True)')
+                       help='Invert horizontal camera servo direction (default: True)')
+    parser.add_argument('--invert-vertical', action='store_true', default=False,
+                       help='Invert vertical camera servo direction (default: False)')
     
     args = parser.parse_args()
     
@@ -707,7 +974,8 @@ def main():
         scan_speed=args.scan_speed,
         debug=args.debug,
         headless=args.headless,
-        invert_camera=args.invert_camera
+        invert_camera=args.invert_camera,
+        invert_vertical=args.invert_vertical
     )
     
     face_follow.run()
