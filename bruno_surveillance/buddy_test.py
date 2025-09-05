@@ -354,8 +354,8 @@ class STT:
                                 # Enhanced microphone settings for better wake detection
                                 self._recognizer.dynamic_energy_threshold = True
                                 self._recognizer.energy_threshold = int(os.environ.get('BUDDY_ENERGY_THRESHOLD', '150'))  # Lower for sensitivity
-                                self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '0.4'))  # Shorter pause
-                                self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.2'))  # Shorter non-speaking
+                                self._recognizer.pause_threshold = float(os.environ.get('BUDDY_PAUSE_THRESHOLD', '1.0'))  # Allow natural speech pauses
+                                self._recognizer.non_speaking_duration = float(os.environ.get('BUDDY_NON_SPEAKING', '0.8'))  # Wait longer before ending speech
                                 self._recognizer.operation_timeout = None  # No timeout for continuous operation
                                 # Adjust for ambient noise with better settings
                                 self._recognizer.adjust_for_ambient_noise(source, duration=1.0)  # Longer calibration
