@@ -10,6 +10,8 @@ SpeechRecognition
 pyaudio
 # Optional for offline speech recognition
 vosk
+# Presentation generation (optional for pitch deck)
+python-pptx
 # Optional for captioner stub:
 # transformers
 # torch
