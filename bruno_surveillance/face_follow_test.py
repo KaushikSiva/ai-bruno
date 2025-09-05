@@ -89,23 +89,27 @@ class ArmScanner:
         self.arm_ik = arm_ik
         self.current_position = 0
         self.scan_positions = []
-        self.scan_speed = 1500  # milliseconds for movement
+        self.scan_speed = 1200  # milliseconds for movement - faster scanning
         self.is_scanning = False
         
         # Define scanning pattern based on HiWonder docs
         self._init_scan_positions()
     
     def _init_scan_positions(self):
-        """Initialize the scanning positions based on HiWonder section 4.4.3."""
-        # Base pattern from documentation
+        """Initialize the scanning positions for comprehensive face scanning."""
+        # Enhanced scanning pattern with wider coverage and better arm extension
         base_positions = [
-            (0, 6, 18),    # Center/initial
-            (5, 6, 18),    # Right
-            (5, 13, 11),   # Right-high
-            (0, 13, 11),   # Center-high
-            (-5, 13, 11),  # Left-high
-            (-5, 6, 18),   # Left
-            (0, 6, 18),    # Back to center
+            (0, 10, 25),    # Center/initial - extended reach
+            (15, 10, 25),   # Right - wider angle
+            (15, 18, 15),   # Right-high - full extension
+            (15, 25, 8),    # Right-far - maximum reach
+            (0, 25, 8),     # Center-far - maximum forward reach
+            (-15, 25, 8),   # Left-far - maximum reach
+            (-15, 18, 15),  # Left-high - full extension  
+            (-15, 10, 25),  # Left - wider angle
+            (-8, 15, 20),   # Left-mid - intermediate position
+            (8, 15, 20),    # Right-mid - intermediate position
+            (0, 10, 25),    # Back to center
         ]
         
         # Add intermediate positions for smoother scanning
@@ -133,8 +137,8 @@ class ArmScanner:
         self.is_scanning = False
         if self.arm_ik and HW_AVAILABLE:
             try:
-                # Return to center position
-                self.arm_ik.setPitchRangeMoving((0, 6, 18), 0, -90, 90, self.scan_speed)
+                # Return to center position  
+                self.arm_ik.setPitchRangeMoving((0, 10, 25), 0, -90, 90, self.scan_speed)
                 LOG.info("🎯 Stopped scanning, returned to center")
             except Exception as e:
                 LOG.warning(f"Failed to return arm to center: {e}")
@@ -184,9 +188,9 @@ class CameraMountController:
         self.max_pulse = 1900
         self.step_size = 20
         
-        # Tracking parameters
-        self.center_dead_zone = 30  # pixels
-        self.max_speed = 50  # max pulse change per update
+        # Tracking parameters - improved responsiveness
+        self.center_dead_zone = 15  # pixels - smaller for better tracking
+        self.max_speed = 80  # max pulse change per update - faster response
         
     def center_camera(self):
         """Move camera to center position."""
@@ -213,10 +217,10 @@ class CameraMountController:
         if abs(error) < self.center_dead_zone:
             return False
         
-        # Calculate pulse adjustment
+        # Calculate pulse adjustment with improved responsiveness
         # Negative error = face is left of center, servo should move left (decrease pulse)
         # Positive error = face is right of center, servo should move right (increase pulse)
-        pulse_adjustment = int(error * 0.5)  # Scale factor for responsiveness
+        pulse_adjustment = int(error * 0.8)  # Increased scale factor for better responsiveness
         pulse_adjustment = max(-self.max_speed, min(self.max_speed, pulse_adjustment))
         
         new_pulse = self.current_pulse + pulse_adjustment
@@ -225,7 +229,7 @@ class CameraMountController:
         if new_pulse != self.current_pulse:
             try:
                 self.current_pulse = new_pulse
-                self.board.pwm_servo_set_position(0.05, [[self.camera_servo_id, self.current_pulse]])
+                self.board.pwm_servo_set_position(0.02, [[self.camera_servo_id, self.current_pulse]])  # Faster update rate
                 LOG.debug(f"Camera tracking: pulse={self.current_pulse}, error={error}")
                 return True
             except Exception as e:
@@ -250,7 +254,7 @@ class FaceTracker:
         # Tracking state
         self.last_face: Optional[FaceInfo] = None
         self.face_lost_time: Optional[float] = None
-        self.face_lost_threshold = 2.0  # seconds
+        self.face_lost_threshold = 0.8  # seconds - shorter for fast movement tracking
         
         # Face area thresholds for distance estimation
         self.min_face_area = 1000    # Too far away
@@ -446,7 +450,7 @@ class FaceFollowTest:
         # Look for faces while scanning
         face = self.face_tracker.detect_faces(frame)
         if face:
-            self._change_state(FaceFollowState.FACE_DETECTED, f"Found face (area: {face.area})")
+            self._change_state(FaceFollowState.FACE_DETECTED, f"Found face (area: {face.area}, conf: {face.confidence:.2f})")
             self.arm_scanner.stop_scanning()
             return self.face_tracker.draw_face_info(frame, face)
         
@@ -456,9 +460,10 @@ class FaceFollowTest:
             # Start new scan cycle
             self.arm_scanner.start_scanning()
         
-        # Add scanning indicator to frame
-        cv2.putText(frame, "SCANNING FOR FACES", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        # Add scanning indicator to frame with position info
+        scan_pos = f"{self.arm_scanner.current_position}/{len(self.arm_scanner.scan_positions)}"
+        cv2.putText(frame, f"SCANNING FOR FACES ({scan_pos})", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
         
         return frame
     
@@ -527,11 +532,11 @@ class FaceFollowTest:
         # Quick check for face before starting full scan
         face = self.face_tracker.detect_faces(frame)
         if face:
-            self._change_state(FaceFollowState.FACE_DETECTED, "Face reappeared")
+            self._change_state(FaceFollowState.FACE_DETECTED, "Face reappeared quickly")
             return self.face_tracker.draw_face_info(frame, face)
         
-        # No face found, return to scanning
-        self._change_state(FaceFollowState.SCANNING, "Starting new scan cycle")
+        # No face found, return to comprehensive scanning
+        self._change_state(FaceFollowState.SCANNING, "Starting comprehensive scan cycle")
         self.arm_scanner.start_scanning()
         
         cv2.putText(frame, "FACE LOST - Returning to scan", 
@@ -614,8 +619,8 @@ class FaceFollowTest:
                         self._change_state(FaceFollowState.SCANNING, "Manual reset")
                         self.arm_scanner.start_scanning()
                 
-                # Small delay to prevent excessive CPU usage
-                time.sleep(0.03)
+                # Small delay to prevent excessive CPU usage - reduced for better responsiveness
+                time.sleep(0.02)
                 
         except KeyboardInterrupt:
             LOG.info("🛑 Interrupted by user")
