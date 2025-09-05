@@ -320,23 +320,23 @@ class CameraMountController:
         self.horizontal_pulse = 1500  # Center position
         self.vertical_pulse = 1500    # Center position
         
-        # Servo limits
-        self.min_pulse = 1100
-        self.max_pulse = 1900
+        # Servo limits with safety margins
+        self.min_pulse = 1200  # Increased from 1100 for safety margin
+        self.max_pulse = 1800  # Decreased from 1900 for safety margin
         self.step_size = 20
         
-        # Tracking parameters - enhanced responsiveness and stability
-        self.center_dead_zone = 8   # pixels - very small for precise tracking
-        self.max_speed = 120         # max pulse change per update - very fast response
-        self.emergency_speed = 200   # emergency speed for rapid face recovery
+        # Tracking parameters - balanced responsiveness and stability
+        self.center_dead_zone = 20  # pixels - larger dead zone for stability
+        self.max_speed = 50          # max pulse change per update - moderate response
+        self.emergency_speed = 80    # emergency speed for rapid face recovery - reduced
         self.invert_horizontal = True   # Set to True if horizontal servo direction is backwards
         self.invert_vertical = False    # Set to True if vertical servo direction is backwards
         
         # Predictive tracking system
         self.last_face_pos = None       # (x, y, timestamp)
         self.face_velocity = (0, 0)     # (vx, vy) pixels per second
-        self.prediction_factor = 0.3    # How much to predict ahead
-        self.velocity_smoothing = 0.7   # Velocity smoothing factor
+        self.prediction_factor = 0.2    # How much to predict ahead - reduced
+        self.velocity_smoothing = 0.9   # Velocity smoothing factor - much higher for stability
         self.lock_mode = False          # Enhanced lock mode when face is stable
         self.emergency_mode = False     # Emergency mode for rapid recovery
         self.last_emergency_time = 0    # Track emergency mode timing
@@ -357,25 +357,32 @@ class CameraMountController:
                 LOG.warning(f"Failed to center camera: {e}")
     
     def _update_face_velocity(self, face_x: int, face_y: int) -> None:
-        """Update face velocity estimation for predictive tracking."""
+        """Update face velocity estimation for predictive tracking with stability."""
         current_time = time.time()
         
         if self.last_face_pos is not None:
             last_x, last_y, last_time = self.last_face_pos
             dt = current_time - last_time
             
-            if dt > 0:  # Avoid division by zero
+            # Only update if enough time has passed for stable calculation
+            if dt > 0.05:  # Minimum 50ms between velocity updates
                 # Calculate instantaneous velocity
                 vx = (face_x - last_x) / dt
                 vy = (face_y - last_y) / dt
+                
+                # Cap velocity to reasonable values to prevent jitter
+                vx = max(-500, min(500, vx))  # Cap at +/-500 pixels/second
+                vy = max(-500, min(500, vy))
                 
                 # Apply velocity smoothing
                 self.face_velocity = (
                     self.velocity_smoothing * self.face_velocity[0] + (1 - self.velocity_smoothing) * vx,
                     self.velocity_smoothing * self.face_velocity[1] + (1 - self.velocity_smoothing) * vy
                 )
-        
-        self.last_face_pos = (face_x, face_y, current_time)
+                
+                self.last_face_pos = (face_x, face_y, current_time)
+        else:
+            self.last_face_pos = (face_x, face_y, current_time)
     
     def _get_predicted_position(self, face_x: int, face_y: int) -> tuple:
         """Get predicted face position based on current velocity."""
@@ -388,16 +395,14 @@ class CameraMountController:
         return int(predicted_x), int(predicted_y)
     
     def _update_lock_mode(self, movement_magnitude: float) -> None:
-        """Update enhanced lock mode based on face movement."""
-        # Enter lock mode if face is relatively stable
-        if movement_magnitude < 20:  # pixels per second
-            if not self.lock_mode:
-                self.lock_mode = True
-                LOG.info("🔒 Enhanced lock mode ENGAGED - face stable")
-        else:
-            if self.lock_mode:
-                self.lock_mode = False
-                LOG.info("🔓 Enhanced lock mode RELEASED - face moving fast")
+        """Update enhanced lock mode based on face movement with hysteresis."""
+        # Use hysteresis to prevent rapid switching
+        if not self.lock_mode and movement_magnitude < 10:  # Enter lock mode - lower threshold
+            self.lock_mode = True
+            LOG.info("🔒 Enhanced lock mode ENGAGED - face stable")
+        elif self.lock_mode and movement_magnitude > 50:  # Exit lock mode - higher threshold  
+            self.lock_mode = False
+            LOG.info("🔓 Enhanced lock mode RELEASED - face moving fast")
     
     def track_face(self, face_center_x: int, face_center_y: int, frame_width: int, frame_height: int) -> bool:
         """
@@ -415,18 +420,19 @@ class CameraMountController:
         movement_magnitude = (vx**2 + vy**2)**0.5
         self._update_lock_mode(movement_magnitude)
         
-        # Check for emergency mode (very fast movement or large error)
+        # Check for emergency mode (very fast movement or large error) - more conservative
         frame_center_x_temp = frame_width // 2
         frame_center_y_temp = frame_height // 2
         error_magnitude = ((face_center_x - frame_center_x_temp)**2 + (face_center_y - frame_center_y_temp)**2)**0.5
         
         current_time = time.time()
-        if error_magnitude > 100 or movement_magnitude > 200:  # Large error or very fast movement
+        # Much higher thresholds to avoid false emergency triggers
+        if error_magnitude > 200 or movement_magnitude > 500:  # Only for truly large errors/fast movement
             if not self.emergency_mode:
                 self.emergency_mode = True
                 self.last_emergency_time = current_time
                 LOG.info("🚨 Emergency tracking mode ENGAGED - rapid face recovery")
-        elif self.emergency_mode and current_time - self.last_emergency_time > 2.0:
+        elif self.emergency_mode and current_time - self.last_emergency_time > 1.0:  # Shorter timeout
             self.emergency_mode = False
             LOG.info("🚨 Emergency tracking mode RELEASED")
         
@@ -458,8 +464,8 @@ class CameraMountController:
         
         # Horizontal tracking
         if not x_in_deadzone:
-            # Calculate horizontal pulse adjustment
-            h_pulse_adjustment = int(error_x * 0.8)  # Scale factor for responsiveness
+            # Calculate horizontal pulse adjustment - reduced sensitivity
+            h_pulse_adjustment = int(error_x * 0.3)  # Reduced scale factor for stability
             
             # Apply direction inversion if needed
             if self.invert_horizontal:
@@ -477,8 +483,8 @@ class CameraMountController:
         
         # Vertical tracking  
         if not y_in_deadzone:
-            # Calculate vertical pulse adjustment
-            v_pulse_adjustment = int(error_y * 0.8)  # Scale factor for responsiveness
+            # Calculate vertical pulse adjustment - reduced sensitivity  
+            v_pulse_adjustment = int(error_y * 0.3)  # Reduced scale factor for stability
             
             # Apply direction inversion if needed
             if self.invert_vertical:
