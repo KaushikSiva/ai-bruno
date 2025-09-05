@@ -396,11 +396,11 @@ class CameraMountController:
     
     def _update_lock_mode(self, movement_magnitude: float) -> None:
         """Update enhanced lock mode based on face movement with hysteresis."""
-        # Use hysteresis to prevent rapid switching
-        if not self.lock_mode and movement_magnitude < 10:  # Enter lock mode - lower threshold
+        # Use hysteresis to prevent rapid switching - more conservative thresholds
+        if not self.lock_mode and movement_magnitude < 5:  # Enter lock mode - very stable face
             self.lock_mode = True
             LOG.info("🔒 Enhanced lock mode ENGAGED - face stable")
-        elif self.lock_mode and movement_magnitude > 50:  # Exit lock mode - higher threshold  
+        elif self.lock_mode and movement_magnitude > 100:  # Exit lock mode - much higher threshold  
             self.lock_mode = False
             LOG.info("🔓 Enhanced lock mode RELEASED - face moving fast")
     
@@ -427,12 +427,12 @@ class CameraMountController:
         
         current_time = time.time()
         # Much higher thresholds to avoid false emergency triggers
-        if error_magnitude > 200 or movement_magnitude > 500:  # Only for truly large errors/fast movement
+        if error_magnitude > 300 or movement_magnitude > 800:  # Only for truly large errors/fast movement
             if not self.emergency_mode:
                 self.emergency_mode = True
                 self.last_emergency_time = current_time
                 LOG.info("🚨 Emergency tracking mode ENGAGED - rapid face recovery")
-        elif self.emergency_mode and current_time - self.last_emergency_time > 1.0:  # Shorter timeout
+        elif self.emergency_mode and current_time - self.last_emergency_time > 2.0:  # Longer timeout
             self.emergency_mode = False
             LOG.info("🚨 Emergency tracking mode RELEASED")
         
@@ -440,8 +440,8 @@ class CameraMountController:
         if self.emergency_mode:
             # Use current position with emergency speed
             target_x, target_y = face_center_x, face_center_y
-        elif self.lock_mode or movement_magnitude < 10:
-            # Use current position for stable faces
+        elif self.lock_mode or movement_magnitude < 5:
+            # Use current position for stable faces - only truly stable faces
             target_x, target_y = face_center_x, face_center_y
         else:
             # Use predicted position for moving faces
