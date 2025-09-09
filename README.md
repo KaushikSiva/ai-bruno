@@ -1,4 +1,4 @@
-# Bruno Dual-Mode Surveillance
+# Bruno the Buddy
 
 Switch between **builtin** and **external** camera without changing code.
 
