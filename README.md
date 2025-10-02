@@ -1,5 +1,7 @@
 # Bruno the Buddy
 
+youtube video : https://www.youtube.com/watch?v=d_K3juzPHkk
+
  Meet Bruno, a smart robot powered by GPT-OSS that combines surveillance, obstacle avoidance, and face-tracking with a playful side. He chats, teaches math and science, and even follows you like a buddy. Today, he’s a guardian and learning partner. Tomorrow, he’s a sustainability hero, picking up plastic bottles and helping the environment. Bruno isn’t just a robot; he’s a platform for security, education, and innovation in your home.
 
 ## Tech Stack
