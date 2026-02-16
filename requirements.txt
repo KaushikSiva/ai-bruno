@@ -1,0 +1,7 @@
+opencv-python
+PyAudio
+SpeechRecognition
+numpy
+pocketsphinx
+pydub
+requests
