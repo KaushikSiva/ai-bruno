@@ -10,3 +10,5 @@ detections/
 logs/
 bruno_surveillance/debug/
 bruno_surveillance/gpt_images/
+.DS_Store
+**/.DS_Store
