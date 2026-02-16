@@ -52,6 +52,15 @@ CAPTION_BACKEND=local        # or groq
 GROQ_API_KEY=                # required if CAPTION_BACKEND=groq
 GROQ_VISION_MODEL=llama-4-maverick-17b-128e-instruct
 GROQ_API_BASE=https://api.groq.com/openai/v1
+
+# Optional: Gemini robotics policy (AI-driven motion)
+ROBOT_POLICY=                 # set to 'gemini' to enable
+GEMINI_API_KEY=               # or GOOGLE_API_KEY
+GEMINI_MODEL=gemini-robotics-er-1.5-preview  # recommended robotics model
+GEMINI_API_BASE=https://generativelanguage.googleapis.com
+GEMINI_USE_SDK=1              # use google-genai SDK if installed
+GEMINI_TARGET_OBJECT=water bottle  # optional: goal-directed approach behavior
+GEMINI_TARGET_MODE=bbox       # 'bbox' for deterministic centering, or 'policy' (default)
 ```
 
 ## Notes
@@ -66,6 +75,25 @@ GROQ_API_BASE=https://api.groq.com/openai/v1
   - Optional: change `GROQ_VISION_MODEL` (defaults to `llama-4-maverick-17b-128e-instruct`).
   - The app will send each snapshot as a data URL to Groq’s OpenAI‑compatible `chat/completions` and use the response as the caption.
   - Or use CLI: `--caption-backend groq` (requires `GROQ_API_KEY`).
+
+## Gemini Robotics Policy (optional)
+- Enable a lightweight robotics policy powered by Gemini to propose short, safe motions after each snapshot.
+  - Set `ROBOT_POLICY=gemini` and provide `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
+  - Recommended model: `gemini-robotics-er-1.5-preview`.
+  - To use Google’s official SDK: `pip install google-genai` and set `GEMINI_USE_SDK=1`.
+- The controller sends the latest image + caption and expects compact JSON: `{action, duration_s, speed, reason}`.
+- Actions map to Bruno primitives: `forward`, `reverse`, `left`, `right`, `stop`. Duration is clamped to 0..2s.
+- Safety overrides remain active via ultrasonic checks.
+
+### Approach a target (e.g., water bottle)
+- Set `GEMINI_TARGET_OBJECT="water bottle"` to bias behavior toward approaching that object.
+- Choose mode:
+  - `GEMINI_TARGET_MODE=bbox` for deterministic behavior (detect bbox, center, then approach).
+  - `GEMINI_TARGET_MODE=policy` (default) to let the LLM propose actions directly.
+- Behavior:
+  - If the target isn’t visible, the policy suggests a short scan (left/right).
+  - If the target is visible but off-center, it suggests a small turn to center it.
+  - If centered and safe (per ultrasonic), it suggests a short forward move.
 
 ## Audio TTS (optional)
 - When enabled (via `.env BRUNO_AUDIO_ENABLED=1` or `--audio`/`--talk`), Bruno speaks on a background thread:

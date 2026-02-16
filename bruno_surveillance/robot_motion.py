@@ -4,6 +4,9 @@ import common.mecanum as mecanum
 class MecanumWrapper:
     def __init__(self, forward_speed:int=40, turn_speed:int=40):
         self.car=mecanum.MecanumChassis(); self.forward_speed=forward_speed; self.turn_speed=turn_speed
+    def set_velocity(self, speed: float, direction_deg: float, rotation: float):
+        try: self.car.set_velocity(speed, direction_deg, rotation)
+        except Exception: pass
     def stop(self):
         try: self.car.set_velocity(0,0,0)
         except Exception: pass
