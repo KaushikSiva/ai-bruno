@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import select
 import sys
 import time
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 import requests
+import termios
+import tty
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -251,6 +254,44 @@ class VLMRouter:
         return {"action": action, "reason": reason, "confidence": confidence}, "ok"
 
 
+class TerminalKeyPoller:
+    """Non-blocking single-char key poller for terminal stdin."""
+
+    def __init__(self):
+        self._enabled = False
+        self._fd = None
+        self._old_attrs = None
+        try:
+            if sys.stdin.isatty():
+                self._fd = sys.stdin.fileno()
+                self._old_attrs = termios.tcgetattr(self._fd)
+                tty.setcbreak(self._fd)
+                self._enabled = True
+        except Exception as exc:
+            LOG.warning("Terminal key polling unavailable: %s", exc)
+            self._enabled = False
+
+    def poll(self) -> Optional[str]:
+        if not self._enabled or self._fd is None:
+            return None
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.0)
+            if not ready:
+                return None
+            ch = sys.stdin.read(1)
+            return ch.lower() if ch else None
+        except Exception:
+            return None
+
+    def close(self) -> None:
+        if not self._enabled or self._fd is None or self._old_attrs is None:
+            return
+        try:
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_attrs)
+        except Exception:
+            pass
+
+
 class CameraMotionRover:
     def __init__(self, cfg: RoverConfig, show: bool, max_runtime_s: float):
         self.cfg = cfg
@@ -274,9 +315,13 @@ class CameraMotionRover:
         self.stop_latch_until = 0.0
         self.uncertain_frames = 0
         self.turn_history: list[Tuple[float, str]] = []
+        self.armed = False
+        self.last_key_event = "-"
+        self.key_poller = TerminalKeyPoller()
 
     def run(self) -> None:
         LOG.info("Starting camera rover mode=%s vlm_provider=%s", self.cfg.mode, self.cfg.vlm_provider)
+        LOG.info("Controls: y=arm movement, x=immediate stop+disarm, q=quit")
         if not self.camera.open():
             LOG.error("Camera failed to open")
             return
@@ -284,6 +329,10 @@ class CameraMotionRover:
         t0 = time.time()
         try:
             while True:
+                key = self.key_poller.poll()
+                if key is not None and self._handle_key(key):
+                    break
+
                 frame = self._read_frame()
                 if frame is None:
                     self._apply_command("stop")
@@ -291,7 +340,12 @@ class CameraMotionRover:
                     continue
 
                 command, debug = self._decide(frame)
-                self._apply_command(command)
+                if not self.armed:
+                    debug["manual_gate"] = "disarmed"
+                    self._apply_command("stop")
+                else:
+                    debug["manual_gate"] = "armed"
+                    self._apply_command(command)
 
                 if self.show:
                     self._draw_debug(frame, command, debug)
@@ -312,12 +366,32 @@ class CameraMotionRover:
 
     def shutdown(self) -> None:
         self._stop_motion()
+        self.key_poller.close()
         try:
             self.camera.release()
         except Exception:
             pass
         if self.show:
             cv2.destroyAllWindows()
+
+    def _handle_key(self, key: str) -> bool:
+        if key == "y":
+            if not self.armed:
+                self.armed = True
+                self.last_key_event = "arm(y)"
+                LOG.info("Manual arm enabled")
+            return False
+        if key == "x":
+            self.armed = False
+            self.last_key_event = "stop(x)"
+            LOG.warning("Emergency disarm: immediate stop")
+            self._apply_command("stop")
+            return False
+        if key == "q":
+            self.last_key_event = "quit(q)"
+            LOG.info("Quit requested from terminal")
+            return True
+        return False
 
     def _read_frame(self):
         try:
@@ -522,18 +596,21 @@ class CameraMotionRover:
 
         risk = float(debug.get("risk", 0.0))
         confidence = float(debug.get("confidence", 0.0))
+        manual_gate = str(debug.get("manual_gate", "unknown"))
+        effective_cmd = command if self.armed else "stop"
 
-        cv2.putText(view, f"cmd: {command}", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(view, f"cmd: {effective_cmd}", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(view, f"risk: {risk:.2f}", (12, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
         cv2.putText(view, f"conf: {confidence:.2f}", (12, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 220, 0), 2)
         cv2.putText(view, f"state: {debug.get('reason', 'unknown')}", (12, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 255, 220), 2)
+        cv2.putText(view, f"manual: {manual_gate} key={self.last_key_event}", (12, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 180, 180), 1)
 
         vlm = debug.get("vlm") or {}
         if vlm:
             cv2.putText(
                 view,
                 f"vlm: {vlm.get('provider','none')} {vlm.get('reason','')} {vlm.get('latency_ms',0)}ms",
-                (12, 140),
+                (12, 166),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (180, 180, 255),
