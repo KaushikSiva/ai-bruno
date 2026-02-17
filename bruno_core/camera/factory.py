@@ -1,0 +1,39 @@
+from typing import Tuple, Optional
+from bruno_core.logging.setup import LOG
+from bruno_core.camera.builtin import BuiltinCamera
+from bruno_core.camera.external import ExternalCamera
+
+
+class CameraBase:
+    def open(self) -> bool: raise NotImplementedError
+    def read(self) -> Tuple[bool, object]: raise NotImplementedError
+    def get_fresh_frame(self, max_attempts: int = 3, settle_reads: int = 3): raise NotImplementedError
+    def reopen(self) -> None: raise NotImplementedError
+    def release(self) -> None: raise NotImplementedError
+
+
+def make_camera(mode: str, retry_attempts: int, retry_delay: float):
+    if mode == 'builtin':
+        LOG.info('📷 Using BuiltinCamera strategy')
+        return BuiltinCamera(retry_attempts=retry_attempts, retry_delay=retry_delay)
+    LOG.info('📷 Using ExternalCamera strategy')
+    return ExternalCamera(retry_attempts=retry_attempts, retry_delay=retry_delay)
+
+
+def read_or_reconnect(camera, last_good_frame: Optional[object]) -> Optional[object]:
+    """
+    Attempt a camera read; if it fails, reopen the camera and return the
+    previous last_good_frame. On success, returns the new frame.
+    """
+    try:
+        ok, frame = camera.read()
+    except Exception:
+        ok, frame = False, None
+    if ok and frame is not None:
+        return frame
+    LOG.warning('📹 Camera read failed; attempting reconnection...')
+    try:
+        camera.reopen()
+    except Exception:
+        pass
+    return last_good_frame
