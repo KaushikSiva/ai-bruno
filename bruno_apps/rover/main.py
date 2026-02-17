@@ -40,6 +40,11 @@ try:
 except Exception:
     MecanumWrapper = None  # type: ignore
 
+try:
+    from ultralytics import YOLO  # type: ignore
+except Exception:
+    YOLO = None  # type: ignore
+
 
 LOG = logging.getLogger("bruno.cam_rover")
 ALLOWED_ACTIONS = {"left", "right", "forward", "stop"}
@@ -76,6 +81,11 @@ class RoverConfig:
     uncertain_frame_limit: int = 10
     stop_hold_s: float = 0.8
     search_switch_s: float = 1.5
+    use_yolo: bool = True
+    yolo_model: str = "yolov8n.pt"
+    yolo_confidence: float = 0.35
+    yolo_risk_bottom_ratio: float = 0.65
+    yolo_risk_scale: float = 2.0
 
 
 class LegacyVLMRouter:
@@ -303,6 +313,19 @@ class CameraMotionRover:
         self.camera = make_camera(cfg.mode, cfg.retry_attempts, cfg.retry_delay)
         self.motion = MecanumWrapper(forward_speed=cfg.forward_speed, turn_speed=cfg.turn_speed) if MecanumWrapper else None
         self.vlm = VLMRouter(cfg)
+        self.yolo = None
+        self.yolo_enabled = bool(cfg.use_yolo)
+        if self.yolo_enabled:
+            if YOLO is None:
+                LOG.warning("YOLO requested but ultralytics is not installed; falling back to CV-only perception")
+                self.yolo_enabled = False
+            else:
+                try:
+                    self.yolo = YOLO(cfg.yolo_model)
+                    LOG.info("YOLO enabled model=%s conf=%.2f", cfg.yolo_model, cfg.yolo_confidence)
+                except Exception as exc:
+                    LOG.warning("YOLO init failed (%s); falling back to CV-only perception", exc)
+                    self.yolo_enabled = False
 
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
             history=250,
@@ -433,8 +456,12 @@ class CameraMotionRover:
             if best_area >= self.cfg.min_motion_area:
                 bbox = cv2.boundingRect(c)
 
-        risk = self._estimate_risk(gray)
+        yolo_bbox, yolo_risk, yolo_conf = self._yolo_infer(resized)
+        risk = yolo_risk if yolo_bbox is not None else self._estimate_risk(gray)
         confidence = self._estimate_confidence(gray, best_area)
+        if yolo_bbox is not None:
+            bbox = yolo_bbox
+            confidence = max(confidence, yolo_conf)
 
         debug: Dict[str, Any] = {
             "reason": "cv",
@@ -443,6 +470,8 @@ class CameraMotionRover:
             "area": best_area,
             "risk": risk,
             "confidence": confidence,
+            "yolo_on": self.yolo_enabled,
+            "yolo_conf": yolo_conf,
         }
 
         # Hard camera-only safety gates.
@@ -606,13 +635,22 @@ class CameraMotionRover:
         cv2.putText(view, f"conf: {confidence:.2f}", (12, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 220, 0), 2)
         cv2.putText(view, f"state: {debug.get('reason', 'unknown')}", (12, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 255, 220), 2)
         cv2.putText(view, f"manual: {manual_gate} key={self.last_key_event}", (12, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 180, 180), 1)
+        cv2.putText(
+            view,
+            f"yolo: {'on' if bool(debug.get('yolo_on')) else 'off'} conf={float(debug.get('yolo_conf', 0.0)):.2f}",
+            (12, 166),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (180, 255, 180),
+            1,
+        )
 
         vlm = debug.get("vlm") or {}
         if vlm:
             cv2.putText(
                 view,
                 f"vlm: {vlm.get('provider','none')} {vlm.get('reason','')} {vlm.get('latency_ms',0)}ms",
-                (12, 166),
+                (12, 192),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (180, 180, 255),
@@ -620,6 +658,63 @@ class CameraMotionRover:
             )
 
         cv2.imshow("Bruno Camera Rover", view)
+
+    def _yolo_infer(self, frame_small) -> Tuple[Optional[Tuple[int, int, int, int]], float, float]:
+        if not self.yolo_enabled or self.yolo is None:
+            return None, 0.0, 0.0
+
+        try:
+            results = self.yolo.predict(
+                source=frame_small,
+                verbose=False,
+                conf=max(0.01, min(0.99, self.cfg.yolo_confidence)),
+                imgsz=256,
+                max_det=10,
+            )
+        except Exception as exc:
+            LOG.debug("YOLO inference failed: %s", exc)
+            return None, 0.0, 0.0
+
+        if not results:
+            return None, 0.0, 0.0
+
+        boxes = results[0].boxes
+        if boxes is None or len(boxes) == 0:
+            return None, 0.0, 0.0
+
+        h, w = frame_small.shape[:2]
+        best_bbox = None
+        best_conf = 0.0
+        best_area = 0.0
+        risk = 0.0
+        bottom_cut = int(h * self.cfg.yolo_risk_bottom_ratio)
+
+        for i in range(len(boxes)):
+            try:
+                xyxy = boxes.xyxy[i].tolist()
+                conf = float(boxes.conf[i].item())
+            except Exception:
+                continue
+
+            x1, y1, x2, y2 = [int(max(0, v)) for v in xyxy]
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            bw = min(w, x2) - max(0, x1)
+            bh = min(h, y2) - max(0, y1)
+            area = float(max(1, bw * bh))
+            area_ratio = area / float(max(1, w * h))
+
+            if area > best_area:
+                best_area = area
+                best_bbox = (max(0, x1), max(0, y1), max(1, bw), max(1, bh))
+                best_conf = conf
+
+            # Near-field risk proxy from detections in lower frame.
+            if y2 >= bottom_cut:
+                risk = max(risk, min(1.0, area_ratio * self.cfg.yolo_risk_scale))
+
+        return best_bbox, risk, max(0.0, min(1.0, best_conf))
 
 
 def parse_args() -> argparse.Namespace:
@@ -640,6 +735,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stop-hold-s", type=float, default=get_env_float("BRUNO_ROVER_STOP_HOLD_S"))
     parser.add_argument("--uncertain-frame-limit", type=int, default=get_env_int("BRUNO_ROVER_UNCERTAIN_FRAME_LIMIT"))
     parser.add_argument("--search-switch-s", type=float, default=get_env_float("BRUNO_ROVER_SEARCH_SWITCH_S"))
+    parser.add_argument("--use-yolo", dest="use_yolo", action="store_true", help="Enable YOLO perception (default)")
+    parser.add_argument("--no-yolo", dest="use_yolo", action="store_false", help="Disable YOLO and use legacy CV only")
+    parser.set_defaults(use_yolo=get_env_bool("BRUNO_USE_YOLO"))
+    parser.add_argument("--yolo-model", default=get_env_str("BRUNO_YOLO_MODEL"))
+    parser.add_argument("--yolo-confidence", type=float, default=get_env_float("BRUNO_YOLO_CONF"))
+    parser.add_argument("--yolo-risk-bottom-ratio", type=float, default=get_env_float("BRUNO_YOLO_RISK_BOTTOM_RATIO"))
+    parser.add_argument("--yolo-risk-scale", type=float, default=get_env_float("BRUNO_YOLO_RISK_SCALE"))
 
     parser.add_argument("--use-vlm", dest="use_vlm", action="store_true", help="Enable advisory VLM (default)")
     parser.add_argument("--no-vlm", dest="use_vlm", action="store_false", help="Disable advisory VLM")
@@ -691,6 +793,11 @@ def main() -> None:
         stop_hold_s=args.stop_hold_s,
         uncertain_frame_limit=args.uncertain_frame_limit,
         search_switch_s=args.search_switch_s,
+        use_yolo=args.use_yolo,
+        yolo_model=args.yolo_model,
+        yolo_confidence=args.yolo_confidence,
+        yolo_risk_bottom_ratio=args.yolo_risk_bottom_ratio,
+        yolo_risk_scale=args.yolo_risk_scale,
     )
 
     rover = CameraMotionRover(cfg=cfg, show=args.show, max_runtime_s=args.max_runtime)
