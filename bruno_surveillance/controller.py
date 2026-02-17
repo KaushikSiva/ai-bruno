@@ -8,7 +8,7 @@ import os
 import sys
 import time
 import signal
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 # Hiwonder SDK path for robot deps
 sys.path.append('/home/pi/MasterPi')
@@ -23,10 +23,6 @@ from audio_tts import TTSSpeaker
 from robot_motion import MecanumWrapper
 from ultrasonic import UltrasonicRGB
 from camera_shared import make_camera, read_or_reconnect
-try:
-    from gemini_robotics import GeminiPolicy  # optional
-except Exception:
-    GeminiPolicy = None  # type: ignore
 
 try:
     import cv2
@@ -71,21 +67,6 @@ class BrunoController:
             except Exception as e:
                 LOG.warning(f'Audio init failed; continuing without TTS: {e}')
 
-        # Optional AI policy (Gemini)
-        self.policy = None
-        self.policy_name = (os.environ.get('ROBOT_POLICY') or os.environ.get('AI_POLICY') or '').strip().lower()
-        if self.policy_name in ('gemini', 'gemini_robotics', 'google_gemini') and GeminiPolicy is not None:
-            try:
-                self.policy = GeminiPolicy()
-                if not self.policy.enabled():
-                    LOG.warning('Gemini policy selected but GEMINI_API_KEY/GOOGLE_API_KEY is not set; continuing without policy')
-                    self.policy = None
-                else:
-                    LOG.info('🤖 Gemini robotics policy enabled')
-            except Exception as e:
-                LOG.warning(f'Failed to init Gemini policy: {e}')
-                self.policy = None
-
     # ----- High-level lifecycle -----
     def run(self):
         self._log_startup()
@@ -127,19 +108,9 @@ class BrunoController:
                 # 2) Snapshot cadence (camera-agnostic)
                 if self.snapshotter.due():
                     if last_good_frame is not None:
-                        img_path, cap_text = self._take_and_caption(last_good_frame)
-                        if self.policy is not None:
-                            act = self.policy.decide_action(
-                                str(img_path),
-                                cap_text,
-                                last_distance_cm=last_distance_cm,
-                                ultra_caution_cm=self.cfg.ultra_caution_cm,
-                                ultra_danger_cm=self.cfg.ultra_danger_cm,
-                            )
-                            self._apply_policy_action(act)
-                        else:
-                            if last_distance_cm is None or last_distance_cm > self.cfg.ultra_caution_cm:
-                                self.motion.forward()
+                        self._take_and_caption(last_good_frame)
+                        if last_distance_cm is None or last_distance_cm > self.cfg.ultra_caution_cm:
+                            self.motion.forward()
                     else:
                         LOG.warning('⚠️  Snapshot due, but no frame available yet (skipping).')
 
@@ -222,30 +193,6 @@ class BrunoController:
             pass
 
     # (camera read helper moved to camera_shared.read_or_reconnect)
-
-    # ----- Policy helpers -----
-    def _apply_policy_action(self, act: Dict[str, Any]) -> None:
-        try:
-            action = str(act.get('action', 'stop')).lower()
-        except Exception:
-            action = 'stop'
-        try:
-            duration = float(act.get('duration_s', 0.5))
-        except Exception:
-            duration = 0.5
-        reason = str(act.get('reason', '') or '')
-        LOG.info(f"🤖 Policy action: {action} for {duration:.2f}s — {reason}")
-        if action == 'forward':
-            self.motion.forward(duration=duration)
-        elif action == 'reverse':
-            self.motion.reverse_burst(duration=duration)
-        elif action == 'left':
-            self.motion.turn_left(duration=duration)
-        elif action == 'right':
-            self.motion.turn_right(duration=duration)
-        else:
-            self.motion.stop()
-
 
 # ----- Entrypoint used by app.py -----
 RUNNER: Optional['BrunoController'] = None
