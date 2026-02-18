@@ -15,14 +15,17 @@ fi
 
 AUDIO_FLAG="${AUDIO_FLAG:-}"
 VOICE="${VOICE:-Dominoux}"
-WAKE="${WAKE:-hey bruno}"
+WAKE="${WAKE:-${BUDDY_WAKE:-hello}}"
+MIC_INDEX="${MIC_INDEX:-${BUDDY_MIC_INDEX:-0}}"
 
 echo "Starting buddy"
 echo "  voice: ${VOICE}"
 echo "  wake:  ${WAKE}"
+echo "  mic:   ${MIC_INDEX}"
 
 exec python3 "${APP_ROOT}/main.py" \
   --voice "${VOICE}" \
   --wake "${WAKE}" \
+  --mic-index "${MIC_INDEX}" \
   ${AUDIO_FLAG} \
   "$@"
