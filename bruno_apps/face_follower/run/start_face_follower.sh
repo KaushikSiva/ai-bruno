@@ -13,7 +13,7 @@ if [ -f "${ENV_FILE}" ]; then
   set +a
 fi
 
-MODE="${MODE:-external}"
+MODE="${MODE:-builtin}"
 VOICE="${VOICE:-Dominoux}"
 SCAN_SPEED="${SCAN_SPEED:-1.5}"
 AUDIO_FLAG="${AUDIO_FLAG:-}"
