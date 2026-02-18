@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
-import os, time, cv2, numpy as np
+import os
+import sys
+import time
+import cv2
+import numpy as np
 from flask import Flask, Response
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(ROOT, "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from bruno_core.config.env import get_env_int, get_env_str
 app = Flask(__name__)
 
