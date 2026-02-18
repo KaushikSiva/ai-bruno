@@ -5,27 +5,28 @@ import cv2
 from bruno_core.config.env import get_env_str
 from bruno_core.logging.setup import LOG
 
-# ------------------------------------------------------------------------------
-# Arm neutralizer: prevent the arm from moving to default pose when this module loads
-# Enabled by default. Set EXTERNAL_CAM_NO_ARM=0 to skip.
-# ------------------------------------------------------------------------------
-if get_env_str("EXTERNAL_CAM_NO_ARM") == "1":
+def _maybe_neutralize_arm_pwm() -> None:
+    """
+    Prevent arm movement side effects when external camera path is used.
+    This must not run at import time, otherwise builtin-camera users lose PWM control.
+    """
+    if get_env_str("EXTERNAL_CAM_NO_ARM") != "1":
+        return
     try:
         sys.path.append("/home/pi/MasterPi")
         # Import only Board (not ArmIK) to avoid any IK motions
         from common.ros_robot_controller_sdk import Board  # type: ignore
-        _board = Board()
+        board = Board()
         # Typical arm/gripper channels (adjust if needed)
         for ch in (1, 2, 3, 4, 5, 6):
             try:
-                _board.pwm_servo_enable(ch, False)
+                board.pwm_servo_enable(ch, False)
             except Exception:
                 pass
         LOG.info("🛡️  camera_external: arm PWM disabled on channels 1–6. "
                  "Set EXTERNAL_CAM_NO_ARM=0 to skip.")
-    except Exception as _e:
-        LOG.warning(f"camera_external: arm neutralizer skipped: {_e}")
-# ------------------------------------------------------------------------------
+    except Exception as exc:
+        LOG.warning(f"camera_external: arm neutralizer skipped: {exc}")
 
 def get_available_cameras(limit: int = 10) -> List[Dict]:
     cams = []
@@ -146,6 +147,7 @@ class ExternalCamera:
         self.retry_delay = retry_delay
         self.cap = None
         self.info = None
+        _maybe_neutralize_arm_pwm()
 
     def open(self) -> bool:
         for attempt in range(self.retry_attempts):
