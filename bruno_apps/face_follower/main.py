@@ -541,8 +541,9 @@ class FaceTracker:
     Based on HiWonder section 5.7 face recognition implementation.
     """
     
-    def __init__(self, detection_confidence: float = 0.8):
+    def __init__(self, detection_confidence: float = 0.6):
         # Initialize MediaPipe face detection
+        self.min_confidence = detection_confidence
         self.face_detection = mp.solutions.face_detection.FaceDetection(
             min_detection_confidence=detection_confidence
         )
@@ -583,15 +584,15 @@ class FaceTracker:
         if not results.detections:
             return None
         
-        # Find the largest/most confident face
+        # Find the best face above threshold (prefer larger area; confidence as tiebreaker)
         best_face = None
-        best_score = 0
+        best_area = -1
+        best_conf = -1.0
         frame_h, frame_w = frame.shape[:2]
         
         for detection in results.detections:
             confidence = detection.score[0]
-            
-            if confidence > best_score and confidence > 0.7:  # Minimum confidence
+            if confidence >= self.min_confidence:
                 # Convert normalized coordinates to pixel coordinates
                 bbox = detection.location_data.relative_bounding_box
                 x = int(bbox.xmin * frame_w)
@@ -610,9 +611,12 @@ class FaceTracker:
                         timestamp=time.time()
                     )
                     
-                    if face_info.area > best_score:  # Use area as tie-breaker
+                    if (face_info.area > best_area) or (
+                        face_info.area == best_area and confidence > best_conf
+                    ):
                         best_face = face_info
-                        best_score = face_info.area
+                        best_area = face_info.area
+                        best_conf = confidence
         
         # Update person tracking with the best face found
         if best_face is not None:
@@ -836,7 +840,8 @@ class FaceFollowTest:
     
     def __init__(self, camera_mode: str = "external", audio_enabled: bool = False, 
                  voice: str = "Dominoux", scan_speed: float = 1.5, debug: bool = False,
-                 headless: bool = False, invert_camera: bool = True, invert_vertical: bool = False):
+                 headless: bool = False, invert_camera: bool = True, invert_vertical: bool = False,
+                 face_confidence: float = 0.6):
         self.debug = debug
         self.headless = headless
         self.invert_camera = invert_camera
@@ -866,7 +871,7 @@ class FaceFollowTest:
         self.camera_controller = CameraMountController(self.board)
         self.camera_controller.invert_horizontal = self.invert_camera  # Apply camera direction settings
         self.camera_controller.invert_vertical = self.invert_vertical
-        self.face_tracker = FaceTracker()
+        self.face_tracker = FaceTracker(detection_confidence=face_confidence)
         
         # Configuration
         self.arm_scanner.set_scan_speed(int(scan_speed * 1000))  # Convert to milliseconds
@@ -1329,6 +1334,8 @@ def main():
                        help='Invert vertical camera servo direction')
     parser.add_argument('--no-invert-vertical', dest='invert_vertical', action='store_false',
                        help='Do not invert vertical camera servo direction')
+    parser.add_argument('--face-confidence', type=float, default=0.6,
+                       help='Minimum face detection confidence threshold (default: 0.6)')
     
     args = parser.parse_args()
     
@@ -1341,7 +1348,8 @@ def main():
         debug=args.debug,
         headless=args.headless,
         invert_camera=args.invert_camera,
-        invert_vertical=args.invert_vertical
+        invert_vertical=args.invert_vertical,
+        face_confidence=args.face_confidence
     )
     
     face_follow.run()
