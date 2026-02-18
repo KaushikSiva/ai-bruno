@@ -1191,6 +1191,9 @@ class FaceFollowTest:
     def run(self):
         """Main execution loop."""
         LOG.info("🚀 Starting Face Follow Test")
+        if not self.headless and not os.environ.get("DISPLAY"):
+            LOG.warning("No DISPLAY detected; switching to headless mode.")
+            self.headless = True
         if self.headless:
             LOG.info("🖥️  Running in headless mode - no GUI display")
         
@@ -1231,11 +1234,14 @@ class FaceFollowTest:
 
                 # Display frame with debug info (only in GUI mode)
                 if processed_frame is not None and not self.headless:
-                    display_frame = self._draw_debug_info(processed_frame)
-
-                    # Resize for display
-                    display_frame = cv2.resize(display_frame, (640, 480))
-                    cv2.imshow('Bruno Face Follow Test', display_frame)
+                    try:
+                        display_frame = self._draw_debug_info(processed_frame)
+                        # Resize for display
+                        display_frame = cv2.resize(display_frame, (640, 480))
+                        cv2.imshow('Bruno Face Follow Test', display_frame)
+                    except cv2.error as e:
+                        LOG.warning(f"GUI display failed ({e}); switching to headless mode.")
+                        self.headless = True
 
                 # Handle keyboard input (GUI mode only)
                 if not self.headless:
