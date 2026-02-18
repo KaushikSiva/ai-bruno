@@ -1203,24 +1203,14 @@ class FaceFollowTest:
         self.camera_controller.center_camera()
         self._change_state(FaceFollowState.WIDE_SCANNING, "System initialized")
         self.arm_scanner.start_scanning()
-    
-    def _initialize_hardware(self):
-        """Initialize hardware to known good state like color_tracking.py"""
-        if self.board and self.arm_ik and HW_AVAILABLE:
-            try:
-                # Initialize arm position - same as color_tracking.py initMove()
-                self.arm_ik.setPitchRangeMoving((0, 6, 18), 0, -90, 90, 1500)
-                LOG.info("🔧 Hardware initialized to known state")
-            except Exception as e:
-                LOG.warning(f"Hardware initialization failed: {e}")
-        
+
         last_frame = None
-        
+
         try:
             while True:
                 # Read camera frame
                 last_frame = read_or_reconnect(self.camera, last_frame)
-                
+
                 # Enhanced state machine processing
                 if self.state == FaceFollowState.WIDE_SCANNING:
                     processed_frame = self._handle_state_wide_scanning(last_frame)
@@ -1238,15 +1228,15 @@ class FaceFollowTest:
                     processed_frame = self._handle_state_face_lost(last_frame)
                 else:
                     processed_frame = last_frame
-                
+
                 # Display frame with debug info (only in GUI mode)
                 if processed_frame is not None and not self.headless:
                     display_frame = self._draw_debug_info(processed_frame)
-                    
+
                     # Resize for display
                     display_frame = cv2.resize(display_frame, (640, 480))
                     cv2.imshow('Bruno Face Follow Test', display_frame)
-                
+
                 # Handle keyboard input (GUI mode only)
                 if not self.headless:
                     key = cv2.waitKey(1) & 0xFF
@@ -1258,16 +1248,26 @@ class FaceFollowTest:
                         self._change_state(FaceFollowState.WIDE_SCANNING, "Manual reset")
                         self.arm_scanner.stop_smart_search()
                         self.arm_scanner.start_scanning()
-                
+
                 # Small delay to prevent excessive CPU usage - reduced for better responsiveness
                 time.sleep(0.02)
-                
+
         except KeyboardInterrupt:
             LOG.info("🛑 Interrupted by user")
         except Exception as e:
             LOG.error(f"❌ Unexpected error: {e}")
         finally:
             self._cleanup()
+    
+    def _initialize_hardware(self):
+        """Initialize hardware to known good state like color_tracking.py"""
+        if self.board and self.arm_ik and HW_AVAILABLE:
+            try:
+                # Initialize arm position - same as color_tracking.py initMove()
+                self.arm_ik.setPitchRangeMoving((0, 6, 18), 0, -90, 90, 1500)
+                LOG.info("🔧 Hardware initialized to known state")
+            except Exception as e:
+                LOG.warning(f"Hardware initialization failed: {e}")
     
     def _cleanup(self):
         """Clean up resources."""
