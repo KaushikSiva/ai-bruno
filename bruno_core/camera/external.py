@@ -55,18 +55,18 @@ def fix_camera_permissions():
 
 def _set_fourcc_and_props(cap: cv2.VideoCapture) -> None:
     """Force sane pixel format & props to avoid warped/bent frames."""
-    for fourcc in ("MJPG", "YUYV"):
-        try:
-            ok = cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
-            LOG.info(f"   🎞️  Set FOURCC={fourcc} ok={ok}")
-        except Exception:
-            pass
+    # Prefer MJPG for lower USB bandwidth and better stability on Pi.
+    try:
+        ok = cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        LOG.info(f"   🎞️  Set FOURCC=MJPG ok={ok}")
+    except Exception:
+        pass
     # Best-effort property negotiation (ignore failures)
-    try: cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    try: cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     except Exception: pass
-    try: cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    try: cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     except Exception: pass
-    try: cap.set(cv2.CAP_PROP_FPS, 30)
+    try: cap.set(cv2.CAP_PROP_FPS, 20)
     except Exception: pass
     try: cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     except Exception: pass
