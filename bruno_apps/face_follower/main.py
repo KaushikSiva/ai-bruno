@@ -1314,10 +1314,15 @@ def main():
                        help='Enable debug information display')
     parser.add_argument('--headless', action='store_true',
                        help='Run without GUI display (for headless systems)')
-    parser.add_argument('--invert-camera', action='store_true', default=True,
-                       help='Invert horizontal camera servo direction (default: True)')
-    parser.add_argument('--invert-vertical', action='store_true', default=False,
-                       help='Invert vertical camera servo direction (default: False)')
+    parser.set_defaults(invert_camera=True, invert_vertical=False)
+    parser.add_argument('--invert-camera', dest='invert_camera', action='store_true',
+                       help='Invert horizontal camera servo direction')
+    parser.add_argument('--no-invert-camera', dest='invert_camera', action='store_false',
+                       help='Do not invert horizontal camera servo direction')
+    parser.add_argument('--invert-vertical', dest='invert_vertical', action='store_true',
+                       help='Invert vertical camera servo direction')
+    parser.add_argument('--no-invert-vertical', dest='invert_vertical', action='store_false',
+                       help='Do not invert vertical camera servo direction')
     
     args = parser.parse_args()
     

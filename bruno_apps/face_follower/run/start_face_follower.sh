@@ -18,6 +18,8 @@ VOICE="${VOICE:-Dominoux}"
 SCAN_SPEED="${SCAN_SPEED:-1.5}"
 AUDIO_FLAG="${AUDIO_FLAG:-}"
 HEADLESS_FLAG="${HEADLESS_FLAG:---headless}"
+INVERT_CAMERA_FLAG="${INVERT_CAMERA_FLAG:-}"
+INVERT_VERTICAL_FLAG="${INVERT_VERTICAL_FLAG:-}"
 
 echo "Starting face follower"
 echo "  mode:       ${MODE}"
@@ -30,4 +32,6 @@ exec python3 "${APP_ROOT}/main.py" \
   --scan-speed "${SCAN_SPEED}" \
   ${AUDIO_FLAG} \
   ${HEADLESS_FLAG} \
+  ${INVERT_CAMERA_FLAG} \
+  ${INVERT_VERTICAL_FLAG} \
   "$@"
