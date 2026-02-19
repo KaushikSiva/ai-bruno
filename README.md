@@ -1,9 +1,13 @@
-# Bruno Apps
+# Bruno
 
-This repo has four runnable apps plus shared core modules.
+YOUTUBE
 
 [![Demo Video](https://img.youtube.com/vi/d_K3juzPHkk/hqdefault.jpg)](https://youtu.be/d_K3juzPHkk)
+ 
 
+## Apps
+
+This repo has four runnable apps plus shared core modules.
 
 ## Layout
 
