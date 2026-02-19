@@ -2,6 +2,9 @@
 
 This repo has four runnable apps plus shared core modules.
 
+[![Demo Video](https://img.youtube.com/vi/d_K3juzPHkk/hqdefault.jpg)](https://youtu.be/d_K3juzPHkk)
+
+
 ## Layout
 
 - `bruno_apps/rover/`: navigation + camera safety + VLM advisory
