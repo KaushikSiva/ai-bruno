@@ -93,10 +93,12 @@ def load_config() -> dict:
         return {}
 
 
-def save_poses(recorded: dict) -> None:
+def save_poses(recorded: dict, gripper_id: Optional[int] = None) -> None:
     """Merge recorded poses into config/bruno_config.json."""
     cfg = load_config()
     arm = cfg.setdefault("arm_control", {})
+    if gripper_id is not None:
+        arm.setdefault("gripper_servo", {})["id"] = int(gripper_id)
     if "home" in recorded:
         arm["home_position"] = [round(v, 1) for v in recorded["home"]]
     if "drop" in recorded:
@@ -114,9 +116,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Interactive MasterPi arm calibration")
     parser.add_argument("--step", type=float, default=1.0, help="initial jog step in cm")
     parser.add_argument("--dry-run", action="store_true", help="log motions without moving")
+    parser.add_argument(
+        "--gripper-id",
+        type=int,
+        default=None,
+        help="override the gripper servo id (config default is often wrong per robot)",
+    )
     args = parser.parse_args()
 
     cfg = ArmConfig.from_dict(load_config())
+    if args.gripper_id is not None:
+        cfg.gripper_servo_id = args.gripper_id
+        print(f"\rgripper servo id override: {cfg.gripper_servo_id}\r")
     arm = ArmController(cfg=cfg, dry_run=args.dry_run)
 
     x, y, z = cfg.home_position
@@ -178,7 +189,7 @@ def main() -> int:
                 continue
             elif key == "v":
                 if recorded:
-                    save_poses(recorded)
+                    save_poses(recorded, gripper_id=cfg.gripper_servo_id)
                 else:
                     print("\rnothing recorded yet\r")
                 continue
