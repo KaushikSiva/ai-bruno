@@ -15,7 +15,8 @@ This repo has four runnable apps plus shared core modules.
 - `bruno_apps/surveillance/`: snapshot/caption/summary + ultrasonic safety
 - `bruno_apps/face_follower/`: face detection + pan/tilt tracking
 - `bruno_apps/buddy/`: wake-word voice buddy
-- `bruno_core/`: shared camera, motion, sensors, safety, inference, audio, config, logging
+- `bruno_apps/pick_place/`: prompt-driven pick and place with the arm
+- `bruno_core/`: shared camera, motion, sensors, safety, inference, audio, config, logging, manipulation
 
 ## Setup
 
@@ -65,6 +66,35 @@ Useful overrides:
 ```bash
 MODE=builtin ./bruno_apps/face_follower/run/start_face_follower.sh
 HEADLESS_FLAG="" ./bruno_apps/face_follower/run/start_face_follower.sh --debug
+```
+
+### Pick and Place
+
+Calibrate the arm once (writes poses into `config/bruno_config.json`):
+
+```bash
+python3 bruno_apps/pick_place/calibrate_arm.py
+```
+
+Then run with the camera and VLM servers up (same two terminals as the rover):
+
+```bash
+./bruno_apps/pick_place/run/start_pick_place.sh "pick up the blue bottle and put it on the left"
+```
+
+The VLM is asked once, up front, which object the prompt refers to and where to
+put it. Grasp geometry comes from CV (HSV blob + focal-length distance), not the
+model — single-frame depth is not reliable enough to drive the arm.
+
+Defaults:
+- Grasp standoff: `18` cm (`PP_STANDOFF_CM`)
+- Approach speed: `25` (`PP_SPEED`)
+- Trackable colors: `clear`, `blue`, `green` (from `detection.color_detection`)
+
+Dry run (perception and planning, no motion):
+
+```bash
+python3 bruno_apps/pick_place/main.py --prompt "pick up the green cup" --dry-run
 ```
 
 ### Buddy
