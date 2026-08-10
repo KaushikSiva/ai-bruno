@@ -101,9 +101,9 @@
         "home_position": [15, 0, 20],
         "drop_position": [20, -15, 10],
         "gripper_servo": {
-            "id": 5,
-            "open_position": 1800,
-            "closed_position": 1200
+            "id": 1,
+            "open_position": 2000,
+            "closed_position": 1500
         }
     },
     "behavior": {

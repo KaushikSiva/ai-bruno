@@ -45,9 +45,10 @@ class ArmConfig:
     pickup_height: float = 5.0
     approach_clearance: float = 8.0
     carry_height: float = 18.0
-    gripper_servo_id: int = 5
-    gripper_open_pulse: int = 1800
-    gripper_closed_pulse: int = 1200
+    # Servo 1 is the gripper; IK owns 3-6 (see MasterPi kinematics/arm_move_ik.py).
+    gripper_servo_id: int = 1
+    gripper_open_pulse: int = 2000
+    gripper_closed_pulse: int = 1500
     gripper_move_time: float = 0.6
     grasp_pitch: int = -90
     pitch_range: Tuple[int, int] = (-90, 90)
