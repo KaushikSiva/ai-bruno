@@ -94,6 +94,12 @@ class ArmController:
         try:
             if self.board is None:
                 self.board = Board()
+                # MasterPi's function scripts start the serial receive thread
+                # before issuing servo commands; without it writes are dropped.
+                try:
+                    self.board.enable_reception()
+                except Exception as exc:
+                    LOG.debug(f"enable_reception unavailable: {exc}")
             if self.arm_ik is None:
                 self.arm_ik = ArmIK()
             self.arm_ik.board = self.board
