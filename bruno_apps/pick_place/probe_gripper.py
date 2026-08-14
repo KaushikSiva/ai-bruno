@@ -11,9 +11,14 @@ Run on the robot, with the arm clear of obstacles:
 
     python3 bruno_apps/pick_place/probe_gripper.py
 
-Arm joints are driven by ArmIK over the bus at ids 3-6, so those are skipped by
-default — probing them would jog the arm, not the jaws. Use --include-arm-ids
-only if you have the arm supported and want to rule them out.
+ArmIK drives the arm joints over the *bus* at ids 3-6, so those four are skipped
+by default — probing them would jog the arm, not the jaws. Use --include-arm-ids
+if you have the arm supported and want to rule them out. Every PWM channel is
+probed: PWM is a separate bus from the arm joints (face_follower drives the
+camera on PWM 3 and 6).
+
+Note that the SDK writes are fire-and-forget — an id that nothing is wired to
+raises no error, it just does nothing. A silent pass is not a pass.
 """
 
 import argparse
@@ -44,8 +49,13 @@ ARM_BUS_IDS = (3, 4, 5, 6)
 
 
 def candidates(include_arm_ids: bool) -> list:
+    """Every channel worth trying, PWM first.
+
+    Only the *bus* ids 3-6 are ArmIK's; the PWM channels are a separate bus and
+    are all fair game (face_follower drives the camera on PWM 3 and 6).
+    """
     ids = list(range(1, 7))
-    pwm = [("pwm", i) for i in ids if include_arm_ids or i not in ARM_BUS_IDS]
+    pwm = [("pwm", i) for i in ids]
     bus = [("bus", i) for i in ids if include_arm_ids or i not in ARM_BUS_IDS]
     return pwm + bus
 
