@@ -156,7 +156,26 @@ def main() -> int:
         action="store_true",
         help="also probe bus ids 3-6 (these drive the arm joints — support the arm first)",
     )
+    parser.add_argument(
+        "--only",
+        metavar="PROTO:ID",
+        help="probe a single channel, e.g. pwm:1 — pair with --center/--delta to "
+        "sweep its full travel when a narrow sweep showed nothing",
+    )
     args = parser.parse_args()
+
+    if args.only:
+        try:
+            proto, sid = args.only.split(":", 1)
+            proto = proto.strip().lower()
+            channels = [(proto, int(sid))]
+            if proto not in ("pwm", "bus"):
+                raise ValueError(f"protocol must be pwm or bus, got {proto!r}")
+        except Exception as exc:
+            print(f"bad --only value {args.only!r}: {exc}")
+            return 2
+    else:
+        channels = candidates(args.include_arm_ids)
 
     board = Board()
     try:
@@ -167,7 +186,7 @@ def main() -> int:
     print(__doc__)
     print(f"Sweeping {args.center} ± {args.delta} on each channel. 'q' aborts.\n")
 
-    for protocol, servo_id in candidates(args.include_arm_ids):
+    for protocol, servo_id in channels:
         key = ask(f"  probe {protocol} id {servo_id}? [enter=go / s=skip / q=quit] ")
         if key == "q":
             print("aborted")
