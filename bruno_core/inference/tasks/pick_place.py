@@ -19,8 +19,16 @@ ALLOWED_COLORS = {"clear", "blue", "green", "any"}
 ALLOWED_PLACEMENTS = {"left", "right", "ahead", "home"}
 
 PLAN_SCHEMA = (
-    '{"target_description":"short","target_color":"clear|blue|green|any",'
-    '"place":"left|right|ahead|home","confidence":0.0}'
+    '{"target_description":"<what you see>","target_color":"<clear|blue|green|any>",'
+    '"place":"<left|right|ahead|home>","confidence":<0.0-1.0>}'
+)
+
+# Small VLMs copy placeholders verbatim, so show a filled-in answer too. Without
+# this, LFM2-VL-450M returns the schema's own text as the description and 0.0 as
+# the confidence, while still getting color and place right.
+PLAN_EXAMPLE = (
+    '{"target_description":"blue cube on the table","target_color":"blue",'
+    '"place":"left","confidence":0.9}'
 )
 
 
@@ -40,8 +48,12 @@ def build_plan_payload(frame, instruction: str, model: str) -> Dict[str, Any]:
         "to pick up and where to put it. "
         "target_color must be the dominant color of the object and one of: clear, blue, green, any. "
         "place must be one of: left, right, ahead, home. "
-        "If no object in the frame matches the instruction, use confidence 0.0. "
+        "target_description must describe the object you actually see, in your own "
+        "words — never copy the placeholder text. "
+        "confidence is how sure you are that the object is present: use 0.8 or higher "
+        "when you can see it clearly, and 0.0 only if nothing in the frame matches. "
         f"Return strict minified JSON only with schema {PLAN_SCHEMA}. "
+        f"Example of a well-formed answer: {PLAN_EXAMPLE}. "
         f"Instruction: {instruction}"
     )
     return {
@@ -67,10 +79,6 @@ def parse_plan_response(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
     if obj is None:
         return None, reason
 
-    description = str(obj.get("target_description", "")).strip()
-    if not description:
-        return None, "missing_target_description"
-
     color = str(obj.get("target_color", "any")).strip().lower()
     if color not in ALLOWED_COLORS:
         color = "any"
@@ -78,6 +86,12 @@ def parse_plan_response(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
     place = str(obj.get("place", "home")).strip().lower()
     if place not in ALLOWED_PLACEMENTS:
         place = "home"
+
+    description = str(obj.get("target_description", "")).strip()
+    if not description or _is_schema_echo(description):
+        # Only used for logging and the grasp-check prompt — CV grasps on color,
+        # so a copied placeholder is not worth failing the whole plan over.
+        description = f"{color} object"
 
     return (
         {
@@ -142,6 +156,12 @@ def _parse_json_content(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
     if not isinstance(obj, dict):
         return None, "json_not_object"
     return obj, "ok"
+
+
+def _is_schema_echo(description: str) -> bool:
+    """True if the model copied a placeholder instead of describing the scene."""
+    text = description.strip().lower().strip("<>")
+    return "|" in text or text in ("short", "what you see", "target_description")
 
 
 def _clamp_confidence(value: Any) -> float:
