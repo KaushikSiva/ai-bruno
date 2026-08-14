@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """
-Find the gripper servo empirically.
+Identify and tune the gripper servo empirically.
 
-The arm's IK moves fine but the jaws don't, which means the configured gripper
-channel is wrong — either the id or the protocol (PWM vs serial bus). This
-walks the candidate channels one at a time and asks you which one moved the
-jaws, then writes the answer into config/bruno_config.json.
+MasterPi drives everything over PWM: functions/color_sorting.py opens the jaws
+with [[1, 2000]], closes with [[1, 1500]], and resets the arm with
+[[3, 515], [4, 2170], [5, 945]]. So id 1 is the gripper and 3-6 are arm joints,
+which is what config/bruno_config.json ships with.
 
-Run on the robot, with the arm clear of obstacles:
+Use this when the jaws don't respond, or to tune the open/closed pulses for the
+object you're picking:
 
-    python3 bruno_apps/pick_place/probe_gripper.py
+    python3 bruno_apps/pick_place/probe_gripper.py                # walk the ids
+    python3 bruno_apps/pick_place/probe_gripper.py --only 1       # just the jaws
 
-ArmIK drives the arm joints over the *bus* at ids 3-6, so those four are skipped
-by default — probing them would jog the arm, not the jaws. Use --include-arm-ids
-if you have the arm supported and want to rule them out. Every PWM channel is
-probed: PWM is a separate bus from the arm joints (face_follower drives the
-camera on PWM 3 and 6).
+Answering "yes" to the jaws moving drops into a jog loop for the travel limits,
+which are written back to config/bruno_config.json.
 
-Note that the SDK writes are fire-and-forget — an id that nothing is wired to
-raises no error, it just does nothing. A silent pass is not a pass.
+Ids 3-6 are skipped by default because they move the arm, not the jaws; pass
+--include-arm-ids to sweep them anyway, with the arm supported.
+
+A caveat worth knowing before you trust a negative result: these writes are
+fire-and-forget. A servo that is unplugged, wired backwards, or dead accepts
+every command and raises nothing. Silence here is not proof the id is wrong —
+it once cost this project a long hunt for a software bug that turned out to be
+a reversed connector.
 """
 
 import argparse
@@ -44,39 +49,27 @@ except Exception as exc:  # pragma: no cover - hardware-only path
 
 CONFIG_PATH = os.path.join(REPO_ROOT, "config", "bruno_config.json")
 
-# ArmIK owns these over the bus; touching them moves the arm, not the jaws.
-ARM_BUS_IDS = (3, 4, 5, 6)
+# These move arm joints, not the jaws (color_sorting.py's arm reset).
+ARM_SERVO_IDS = (3, 4, 5, 6)
 
 
 def candidates(include_arm_ids: bool) -> list:
-    """Every channel worth trying, PWM first.
-
-    Only the *bus* ids 3-6 are ArmIK's; the PWM channels are a separate bus and
-    are all fair game (face_follower drives the camera on PWM 3 and 6).
-    """
-    ids = list(range(1, 7))
-    pwm = [("pwm", i) for i in ids]
-    bus = [("bus", i) for i in ids if include_arm_ids or i not in ARM_BUS_IDS]
-    return pwm + bus
+    return [i for i in range(1, 7) if include_arm_ids or i not in ARM_SERVO_IDS]
 
 
-def drive(board, protocol: str, servo_id: int, pulse: int, duration: float) -> None:
-    """Send one position command, letting failures surface."""
-    if protocol == "pwm":
-        board.pwm_servo_set_position(duration, [[servo_id, int(pulse)]])
-    else:
-        board.bus_servo_set_position(duration, [[servo_id, int(pulse)]])
+def drive(board, servo_id: int, pulse: int, duration: float) -> None:
+    board.pwm_servo_set_position(duration, [[servo_id, int(pulse)]])
 
 
-def wiggle(board, protocol: str, servo_id: int, center: int, delta: int, duration: float) -> bool:
+def wiggle(board, servo_id: int, center: int, delta: int, duration: float) -> bool:
     """Sweep a channel around center. Returns False if the channel rejected it."""
     try:
         for pulse in (center, center + delta, center - delta, center):
-            drive(board, protocol, servo_id, pulse, duration)
+            drive(board, servo_id, pulse, duration)
             time.sleep(duration + 0.25)
         return True
     except Exception as exc:
-        print(f"    {protocol} id {servo_id}: command failed ({exc})")
+        print(f"    id {servo_id}: command failed ({exc})")
         return False
 
 
@@ -87,7 +80,7 @@ def ask(prompt: str) -> str:
         return "q"
 
 
-def save(protocol: str, servo_id: int, open_pulse: int, closed_pulse: int) -> None:
+def save(servo_id: int, open_pulse: int, closed_pulse: int) -> None:
     try:
         with open(CONFIG_PATH, "r") as fh:
             cfg = json.load(fh)
@@ -96,7 +89,6 @@ def save(protocol: str, servo_id: int, open_pulse: int, closed_pulse: int) -> No
         cfg = {}
     gripper = cfg.setdefault("arm_control", {}).setdefault("gripper_servo", {})
     gripper["id"] = int(servo_id)
-    gripper["protocol"] = protocol
     gripper["open_position"] = int(open_pulse)
     gripper["closed_position"] = int(closed_pulse)
     with open(CONFIG_PATH, "w") as fh:
@@ -104,8 +96,8 @@ def save(protocol: str, servo_id: int, open_pulse: int, closed_pulse: int) -> No
     print(f"\n💾 saved gripper_servo: {json.dumps(gripper)} -> {CONFIG_PATH}")
 
 
-def find_limits(board, protocol: str, servo_id: int, duration: float) -> tuple:
-    """Jog the found channel to the open and closed pulses you like."""
+def find_limits(board, servo_id: int, duration: float) -> tuple:
+    """Jog the gripper to the open and closed pulses you want."""
     pulse = 1500
     step = 100
     print(
@@ -113,7 +105,8 @@ def find_limits(board, protocol: str, servo_id: int, duration: float) -> tuple:
         "  +/-  jog by the current step      [ ]  step down / up\n"
         "  o    record this as OPEN          c    record this as CLOSED\n"
         "  d    done\n"
-        "Keep the jaws off their hard stops — a stalled servo will cook itself."
+        "Record CLOSED while gripping the object you actually pick, not on empty\n"
+        "air, and stay off the hard stops — a stalled servo will cook itself."
     )
     open_pulse = closed_pulse = None
     while True:
@@ -139,7 +132,7 @@ def find_limits(board, protocol: str, servo_id: int, duration: float) -> tuple:
         else:
             continue
         try:
-            drive(board, protocol, servo_id, pulse, duration)
+            drive(board, servo_id, pulse, duration)
             time.sleep(duration + 0.1)
         except Exception as exc:
             print(f"    command failed: {exc}")
@@ -147,35 +140,19 @@ def find_limits(board, protocol: str, servo_id: int, duration: float) -> tuple:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Identify the MasterPi gripper servo channel")
+    parser = argparse.ArgumentParser(description="Identify and tune the MasterPi gripper servo")
     parser.add_argument("--center", type=int, default=1500, help="neutral pulse to sweep around")
     parser.add_argument("--delta", type=int, default=250, help="sweep amplitude in pulse units")
     parser.add_argument("--duration", type=float, default=0.4, help="move time per step, seconds")
+    parser.add_argument("--only", type=int, default=None, help="probe a single servo id")
     parser.add_argument(
         "--include-arm-ids",
         action="store_true",
-        help="also probe bus ids 3-6 (these drive the arm joints — support the arm first)",
-    )
-    parser.add_argument(
-        "--only",
-        metavar="PROTO:ID",
-        help="probe a single channel, e.g. pwm:1 — pair with --center/--delta to "
-        "sweep its full travel when a narrow sweep showed nothing",
+        help="also probe ids 3-6 (these drive the arm joints — support the arm first)",
     )
     args = parser.parse_args()
 
-    if args.only:
-        try:
-            proto, sid = args.only.split(":", 1)
-            proto = proto.strip().lower()
-            channels = [(proto, int(sid))]
-            if proto not in ("pwm", "bus"):
-                raise ValueError(f"protocol must be pwm or bus, got {proto!r}")
-        except Exception as exc:
-            print(f"bad --only value {args.only!r}: {exc}")
-            return 2
-    else:
-        channels = candidates(args.include_arm_ids)
+    ids = [args.only] if args.only is not None else candidates(args.include_arm_ids)
 
     board = Board()
     try:
@@ -184,29 +161,30 @@ def main() -> int:
         LOG.debug("enable_reception unavailable: %s", exc)
 
     print(__doc__)
-    print(f"Sweeping {args.center} ± {args.delta} on each channel. 'q' aborts.\n")
+    print(f"Sweeping {args.center} ± {args.delta} on each id. 'q' aborts.\n")
 
-    for protocol, servo_id in channels:
-        key = ask(f"  probe {protocol} id {servo_id}? [enter=go / s=skip / q=quit] ")
+    for servo_id in ids:
+        key = ask(f"  probe id {servo_id}? [enter=go / s=skip / q=quit] ")
         if key == "q":
             print("aborted")
             return 1
         if key == "s":
             continue
-        if not wiggle(board, protocol, servo_id, args.center, args.delta, args.duration):
+        if not wiggle(board, servo_id, args.center, args.delta, args.duration):
             continue
         if ask("    did the JAWS move? [y/N] ").startswith("y"):
-            print(f"\n✅ gripper is {protocol} servo id {servo_id}")
-            open_pulse, closed_pulse = find_limits(board, protocol, servo_id, args.duration)
+            print(f"\n✅ gripper is pwm servo id {servo_id}")
+            open_pulse, closed_pulse = find_limits(board, servo_id, args.duration)
             if open_pulse is None or closed_pulse is None:
                 print("no open/closed pair recorded — nothing saved")
                 return 1
-            save(protocol, servo_id, open_pulse, closed_pulse)
+            save(servo_id, open_pulse, closed_pulse)
             return 0
 
-    print("\nNo channel moved the jaws.")
-    print("Check the jaw servo's cable at the controller, and re-run with --include-arm-ids")
-    print("(arm supported) to rule out the bus ids ArmIK uses.")
+    print("\nNo id moved the jaws — suspect wiring before software.")
+    print("Check the jaw servo's lead at the PWM 1 header: seated, and not reversed.")
+    print("To isolate a dead header from a dead servo, swap the jaw servo's lead with")
+    print("the arm joint on PWM 3 and re-run; whichever moves tells you which is at fault.")
     return 1
 
 

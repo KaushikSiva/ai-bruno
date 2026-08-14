@@ -45,10 +45,10 @@ class ArmConfig:
     pickup_height: float = 5.0
     approach_clearance: float = 8.0
     carry_height: float = 18.0
-    # Servo 1 is the gripper; IK owns 3-6 (see MasterPi kinematics/arm_move_ik.py).
-    # Which bus the jaws hang off varies per robot — probe_gripper.py records it.
+    # PWM servo 1 is the gripper, 3-6 are the arm joints — see MasterPi's
+    # functions/color_sorting.py, which opens the jaws with [[1, 2000]], closes
+    # with [[1, 1500]], and resets the arm with [[3, 515], [4, 2170], [5, 945]].
     gripper_servo_id: int = 1
-    gripper_protocol: str = "pwm"  # "pwm" or "bus"
     gripper_open_pulse: int = 2000
     gripper_closed_pulse: int = 1500
     gripper_move_time: float = 0.6
@@ -72,7 +72,6 @@ class ArmConfig:
             grasp_position=(float(grasp[0]), float(grasp[1]), float(grasp[2])) if grasp else None,
             pickup_height=float(arm.get("pickup_height", defaults.pickup_height)),
             gripper_servo_id=int(gripper.get("id", defaults.gripper_servo_id)),
-            gripper_protocol=str(gripper.get("protocol", defaults.gripper_protocol)).lower(),
             gripper_open_pulse=int(gripper.get("open_position", defaults.gripper_open_pulse)),
             gripper_closed_pulse=int(gripper.get("closed_position", defaults.gripper_closed_pulse)),
         )
@@ -107,8 +106,8 @@ class ArmController:
                 self.arm_ik = ArmIK()
             self.arm_ik.board = self.board
             LOG.info(
-                f"🦾 ArmController ready (Board + ArmIK), gripper = "
-                f"{self.cfg.gripper_protocol} id {self.cfg.gripper_servo_id} "
+                f"🦾 ArmController ready (Board + ArmIK), gripper = pwm id "
+                f"{self.cfg.gripper_servo_id} "
                 f"[{self.cfg.gripper_closed_pulse}..{self.cfg.gripper_open_pulse}]"
             )
         except Exception as exc:
@@ -151,21 +150,17 @@ class ArmController:
         """Drive the gripper servo to a raw pulse width. Returns False on failure."""
         t = float(move_time if move_time is not None else self.cfg.gripper_move_time)
         sid = self.cfg.gripper_servo_id
-        proto = self.cfg.gripper_protocol
         if not self.enabled:
-            LOG.info(f"[dry] gripper ({proto} id {sid}) -> {pulse}")
+            LOG.info(f"[dry] gripper (pwm id {sid}) -> {pulse}")
             return True
         try:
-            if proto == "bus":
-                self.board.bus_servo_set_position(t, [[sid, int(pulse)]])
-            else:
-                self.board.pwm_servo_set_position(t, [[sid, int(pulse)]])
+            self.board.pwm_servo_set_position(t, [[sid, int(pulse)]])
             time.sleep(t + 0.1)
             return True
         except Exception as exc:
-            # A wrong id or protocol raises here; without the id in the message
-            # this reads as "gripper is fine" in the log.
-            LOG.error(f"Gripper move failed ({proto} id {sid} -> {pulse}): {exc}")
+            # Note the write itself is fire-and-forget: a servo that is unwired,
+            # or wired backwards, raises nothing here and silently does nothing.
+            LOG.error(f"Gripper move failed (pwm id {sid} -> {pulse}): {exc}")
             return False
 
     def open_gripper(self) -> bool:
