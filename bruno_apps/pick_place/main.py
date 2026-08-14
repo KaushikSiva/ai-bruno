@@ -39,6 +39,8 @@ from bruno_core.camera.factory import make_camera, read_or_reconnect
 from bruno_core.config.env import get_env_float, get_env_int, get_env_str, load_env
 from bruno_core.inference.providers.openai_compat import post_chat_completion
 from bruno_core.inference.tasks.pick_place import (
+    ALLOWED_COLORS,
+    ALLOWED_PLACEMENTS,
     build_grasp_check_payload,
     build_plan_payload,
     parse_grasp_check_response,
@@ -100,6 +102,9 @@ class PickPlaceConfig:
     vlm_api_key: str = "lm-studio"
     vlm_timeout_ms: int = 8000
     vlm_min_confidence: float = 0.35
+    # Set by --target-color/--place to skip the VLM entirely: lets the CV +
+    # arm pipeline be tested without depending on the model's judgement.
+    plan_override: Optional[Dict[str, Any]] = None
     # loop limits
     search_timeout_s: float = 25.0
     approach_timeout_s: float = 45.0
@@ -180,6 +185,16 @@ class ColorTargetDetector:
         return (self.cfg.focal_length * self.cfg.real_object_height) / float(pixel_height)
 
 
+def _raw_content(data: Dict[str, Any]) -> str:
+    """The model's message text, for logging when a response is unusable."""
+    try:
+        text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    except Exception:
+        return "<unreadable>"
+    text = (text or "").strip().replace("\n", " ")
+    return text[:300] if text else "<empty>"
+
+
 class PickPlaceVLM:
     """Single-purpose VLM client for planning and grasp verification."""
 
@@ -209,11 +224,19 @@ class PickPlaceVLM:
             return None
         plan, reason = parse_plan_response(data)
         if plan is None:
-            LOG.error("Plan parse failed: %s", reason)
+            LOG.error("Plan parse failed: %s — model said: %s", reason, _raw_content(data))
             return None
         if plan["confidence"] < self.cfg.vlm_min_confidence:
-            LOG.error("Plan confidence too low: %.2f (%s)", plan["confidence"], plan["target_description"])
+            # Small VLMs tend to echo the schema back rather than describe the
+            # scene, so show what was actually returned.
+            LOG.error(
+                "Plan confidence too low: %.2f (%s) — model said: %s",
+                plan["confidence"],
+                plan["target_description"],
+                _raw_content(data),
+            )
             return None
+        LOG.debug("plan raw: %s", _raw_content(data))
         return plan
 
     def check_grasp(self, frame, target_description: str) -> Optional[bool]:
@@ -344,8 +367,12 @@ class PickPlaceRunner:
     # ---------- states ----------
 
     def do_plan(self, frame) -> None:
-        LOG.info("planning: %r", self.instruction)
-        plan = self.vlm.plan(frame, self.instruction)
+        if self.cfg.plan_override is not None:
+            plan = dict(self.cfg.plan_override)
+            LOG.info("planning: skipped, using --target-color/--place override")
+        else:
+            LOG.info("planning: %r", self.instruction)
+            plan = self.vlm.plan(frame, self.instruction)
         if plan is None:
             LOG.error("no usable plan — aborting")
             self.set_state(State.FAILED)
@@ -520,13 +547,25 @@ def build_config(args) -> PickPlaceConfig:
         vlm_api_key=get_env_str("BRUNO_VLM_API_KEY", "lm-studio"),
         vlm_timeout_ms=args.vlm_timeout_ms,
         vlm_min_confidence=args.vlm_min_confidence,
+        plan_override=(
+            {
+                "target_description": f"{args.target_color} object",
+                "target_color": args.target_color,
+                "place": args.place,
+                "confidence": 1.0,
+            }
+            if args.target_color
+            else None
+        ),
     )
 
 
 def main() -> int:
     load_env(os.path.join(REPO_ROOT, ".env"))
     parser = argparse.ArgumentParser(description="Prompt-driven pick and place")
-    parser.add_argument("--prompt", required=True, help="natural-language instruction")
+    parser.add_argument(
+        "--prompt", default="", help="natural-language instruction (not needed with --target-color)"
+    )
     parser.add_argument("--mode", default=get_env_str("CAM_MODE", "builtin"), choices=["builtin", "external"])
     parser.add_argument("--standoff", type=float, default=get_env_float("BRUNO_PP_STANDOFF_CM", 18.0))
     parser.add_argument("--speed", type=int, default=get_env_int("BRUNO_PP_SPEED", 25))
@@ -534,9 +573,24 @@ def main() -> int:
     parser.add_argument("--vlm-model", default=get_env_str("BRUNO_VLM_LOCAL_MODEL", "gemma3"))
     parser.add_argument("--vlm-timeout-ms", type=int, default=get_env_int("BRUNO_PP_VLM_TIMEOUT_MS", 8000))
     parser.add_argument("--vlm-min-confidence", type=float, default=get_env_float("BRUNO_PP_VLM_MIN_CONF", 0.35))
+    parser.add_argument(
+        "--target-color",
+        choices=sorted(ALLOWED_COLORS),
+        default=None,
+        help="skip the VLM and track this color directly (pairs with --place)",
+    )
+    parser.add_argument(
+        "--place",
+        choices=sorted(ALLOWED_PLACEMENTS),
+        default="home",
+        help="where to drop the object when --target-color is used",
+    )
     parser.add_argument("--dry-run", action="store_true", help="no motion; perception and planning only")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
+
+    if not args.prompt and not args.target_color:
+        parser.error("give --prompt, or --target-color to skip the VLM")
 
     if args.debug:
         LOG.setLevel(logging.DEBUG)
