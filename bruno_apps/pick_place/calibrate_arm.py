@@ -93,12 +93,16 @@ def load_config() -> dict:
         return {}
 
 
-def save_poses(recorded: dict, gripper_id: Optional[int] = None) -> None:
+def save_poses(
+    recorded: dict, gripper_id: Optional[int] = None, gripper_protocol: Optional[str] = None
+) -> None:
     """Merge recorded poses into config/bruno_config.json."""
     cfg = load_config()
     arm = cfg.setdefault("arm_control", {})
     if gripper_id is not None:
         arm.setdefault("gripper_servo", {})["id"] = int(gripper_id)
+    if gripper_protocol is not None:
+        arm.setdefault("gripper_servo", {})["protocol"] = gripper_protocol
     if "home" in recorded:
         arm["home_position"] = [round(v, 1) for v in recorded["home"]]
     if "drop" in recorded:
@@ -122,12 +126,21 @@ def main() -> int:
         default=None,
         help="override the gripper servo id (config default is often wrong per robot)",
     )
+    parser.add_argument(
+        "--gripper-protocol",
+        choices=("pwm", "bus"),
+        default=None,
+        help="override the gripper bus: pwm or bus (see probe_gripper.py)",
+    )
     args = parser.parse_args()
 
     cfg = ArmConfig.from_dict(load_config())
     if args.gripper_id is not None:
         cfg.gripper_servo_id = args.gripper_id
         print(f"\rgripper servo id override: {cfg.gripper_servo_id}\r")
+    if args.gripper_protocol is not None:
+        cfg.gripper_protocol = args.gripper_protocol
+        print(f"\rgripper protocol override: {cfg.gripper_protocol}\r")
     arm = ArmController(cfg=cfg, dry_run=args.dry_run)
 
     x, y, z = cfg.home_position
@@ -167,12 +180,12 @@ def main() -> int:
                 print(f"\rstep = {step:.1f} cm\r")
                 continue
             elif key == "o":
-                arm.open_gripper()
-                print("\rgripper open\r")
+                ok = arm.open_gripper()
+                print(f"\rgripper open\r" if ok else "\r⚠️  gripper command rejected — see log\r")
                 continue
             elif key == "c":
-                arm.close_gripper()
-                print("\rgripper closed\r")
+                ok = arm.close_gripper()
+                print(f"\rgripper closed\r" if ok else "\r⚠️  gripper command rejected — see log\r")
                 continue
             elif key == "h":
                 x, y, z = cfg.home_position
@@ -189,7 +202,11 @@ def main() -> int:
                 continue
             elif key == "v":
                 if recorded:
-                    save_poses(recorded, gripper_id=cfg.gripper_servo_id)
+                    save_poses(
+                        recorded,
+                        gripper_id=cfg.gripper_servo_id,
+                        gripper_protocol=cfg.gripper_protocol,
+                    )
                 else:
                     print("\rnothing recorded yet\r")
                 continue
