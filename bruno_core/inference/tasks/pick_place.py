@@ -27,7 +27,7 @@ PLAN_SCHEMA = (
 # this, LFM2-VL-450M returns the schema's own text as the description and 0.0 as
 # the confidence, while still getting color and place right.
 PLAN_EXAMPLE = (
-    '{"target_description":"blue cube on the table","target_color":"blue",'
+    '{"target_description":"blue plastic bottle on the table","target_color":"blue",'
     '"place":"left","confidence":0.9}'
 )
 

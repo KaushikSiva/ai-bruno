@@ -45,6 +45,12 @@ class ArmConfig:
     pickup_height: float = 5.0
     approach_clearance: float = 8.0
     carry_height: float = 18.0
+    # "overhead" descends onto the object — right for a block, but for a bottle
+    # taller than approach_clearance the waypoint above the grasp point sits
+    # inside the bottle. "side" holds the grasp height and closes in from
+    # approach_backoff cm short of it instead.
+    grasp_approach: str = "side"
+    approach_backoff: float = 6.0
     # PWM servo 1 is the gripper, 3-6 are the arm joints — see MasterPi's
     # functions/color_sorting.py, which opens the jaws with [[1, 2000]], closes
     # with [[1, 1500]], and resets the arm with [[3, 515], [4, 2170], [5, 945]].
@@ -71,6 +77,9 @@ class ArmConfig:
             drop_position=(float(drop[0]), float(drop[1]), float(drop[2])),
             grasp_position=(float(grasp[0]), float(grasp[1]), float(grasp[2])) if grasp else None,
             pickup_height=float(arm.get("pickup_height", defaults.pickup_height)),
+            grasp_approach=str(arm.get("grasp_approach", defaults.grasp_approach)).lower(),
+            approach_backoff=float(arm.get("approach_backoff", defaults.approach_backoff)),
+            grasp_pitch=int(arm.get("grasp_pitch", defaults.grasp_pitch)),
             gripper_servo_id=int(gripper.get("id", defaults.gripper_servo_id)),
             gripper_open_pulse=int(gripper.get("open_position", defaults.gripper_open_pulse)),
             gripper_closed_pulse=int(gripper.get("closed_position", defaults.gripper_closed_pulse)),
@@ -187,19 +196,26 @@ class ArmController:
     # ---------- composites ----------
 
     def pick(self, pose: Pose) -> bool:
-        """Approach from above, close on the object, and lift to carry height.
+        """Approach, close on the object, and lift to carry height.
+
+        The approach waypoint is above the grasp point for "overhead", or short
+        of it at the same height for "side" — the latter is what a bottle needs,
+        since descending onto one means driving through it.
 
         Returns False if any waypoint is unreachable; the arm is returned to a
         safe height on failure so the base can re-approach.
         """
         x, y, z = (float(pose[0]), float(pose[1]), float(pose[2]))
-        above = (x, y, z + self.cfg.approach_clearance)
-        LOG.info(f"🦾 pick at ({x:.1f}, {y:.1f}, {z:.1f})")
+        if self.cfg.grasp_approach == "side":
+            approach = (max(1.0, x - self.cfg.approach_backoff), y, z)
+        else:
+            approach = (x, y, z + self.cfg.approach_clearance)
+        LOG.info(f"🦾 pick at ({x:.1f}, {y:.1f}, {z:.1f}) via {self.cfg.grasp_approach} approach")
         self.open_gripper()
-        if not self.move_to(above):
+        if not self.move_to(approach):
             return False
         if not self.move_to((x, y, z), move_time_ms=900):
-            self.move_to(above)
+            self.move_to(approach)
             return False
         self.close_gripper()
         if not self.move_to((x, y, self.cfg.carry_height), move_time_ms=1000):
