@@ -127,5 +127,72 @@
         "enable_obstacle_detection": true,
         "enable_emergency_stop": true,
         "enable_speed_limiting": true
+    },
+    "vla": {
+        "chassis": {
+            "max_linear_speed_cmps": 30.0,
+            "max_rotation_deg_per_s": 90.0,
+            "real_velocity_units_per_cmps": 10.0,
+            "real_rotation_units_per_deg_per_s": 0.017453292519943295
+        },
+        "arm": {
+            "home_position": [0.0, 6.0, 18.0],
+            "home_pitch_deg": 0.0,
+            "step_cm": 2.0,
+            "min_x": -10.0,
+            "max_x": 10.0,
+            "min_y": 3.0,
+            "max_y": 20.0,
+            "min_z": 4.0,
+            "max_z": 24.0,
+            "joint_step_deg": 5.0,
+            "max_joint_step_deg": 30.0,
+            "move_time_ms": 600
+        },
+        "gripper": {
+            "channel": 1,
+            "open_pulse": 2000,
+            "closed_pulse": 1500,
+            "sim_open_m": 0.02,
+            "sim_closed_m": 0.002
+        },
+        "servos": {
+            "base": {
+                "channel": 6,
+                "center_pulse": 1500.0,
+                "pulse_per_degree": 11.11111,
+                "sign": 1,
+                "min_pulse": 500,
+                "max_pulse": 2500,
+                "verified": false
+            },
+            "shoulder": {
+                "channel": 5,
+                "center_pulse": 1500.0,
+                "pulse_per_degree": 11.11111,
+                "sign": 1,
+                "min_pulse": 500,
+                "max_pulse": 2500,
+                "verified": false
+            },
+            "elbow": {
+                "channel": 4,
+                "center_pulse": 1500.0,
+                "pulse_per_degree": 11.11111,
+                "sign": 1,
+                "min_pulse": 500,
+                "max_pulse": 2500,
+                "verified": false
+            },
+            "wrist": {
+                "channel": 3,
+                "center_pulse": 1500.0,
+                "pulse_per_degree": 11.11111,
+                "sign": 1,
+                "min_pulse": 500,
+                "max_pulse": 2500,
+                "verified": false
+            }
+        }
     }
 }

@@ -155,22 +155,31 @@ class ArmController:
         self.last_pose = (x, y, z)
         return True
 
-    def set_gripper(self, pulse: int, move_time: Optional[float] = None) -> bool:
-        """Drive the gripper servo to a raw pulse width. Returns False on failure."""
+    def set_servos(self, targets: Sequence[Sequence[int]], move_time: Optional[float] = None) -> bool:
+        """Drive one or more PWM channels to raw pulse widths together.
+
+        `targets` is a sequence of `(channel, pulse)` pairs, matching the shape
+        `pwm_servo_set_position` expects. Moving the arm joints in a single call
+        keeps them synchronised instead of stepping one channel at a time.
+        """
         t = float(move_time if move_time is not None else self.cfg.gripper_move_time)
-        sid = self.cfg.gripper_servo_id
+        pairs = [[int(channel), int(pulse)] for channel, pulse in targets]
         if not self.enabled:
-            LOG.info(f"[dry] gripper (pwm id {sid}) -> {pulse}")
+            LOG.info(f"[dry] pwm servos -> {pairs} over {t:.2f}s")
             return True
         try:
-            self.board.pwm_servo_set_position(t, [[sid, int(pulse)]])
+            self.board.pwm_servo_set_position(t, pairs)
             time.sleep(t + 0.1)
             return True
         except Exception as exc:
             # Note the write itself is fire-and-forget: a servo that is unwired,
             # or wired backwards, raises nothing here and silently does nothing.
-            LOG.error(f"Gripper move failed (pwm id {sid} -> {pulse}): {exc}")
+            LOG.error(f"Servo move failed ({pairs}): {exc}")
             return False
+
+    def set_gripper(self, pulse: int, move_time: Optional[float] = None) -> bool:
+        """Drive the gripper servo to a raw pulse width. Returns False on failure."""
+        return self.set_servos([(self.cfg.gripper_servo_id, int(pulse))], move_time)
 
     def open_gripper(self) -> bool:
         ok = self.set_gripper(self.cfg.gripper_open_pulse)
