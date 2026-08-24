@@ -30,7 +30,7 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from .kinematics import JOINT_NAMES, JOINT_SERVO_CHANNELS, clamp_joint_deg
+from .kinematics import JOINT_LIMIT_DEG, JOINT_NAMES, JOINT_SERVO_CHANNELS, clamp_joint_deg
 
 # 500..2500 us spans the servo's full 180 deg of travel.
 DEFAULT_PULSE_PER_DEGREE = 2000.0 / 180.0
@@ -74,6 +74,25 @@ class ServoCalibration:
             return 0.0
         offset = float(pulse) - self.center_pulse - self.deviation_us
         return offset / (self.sign * self.pulse_per_degree)
+
+    def reachable_deg(self) -> Tuple[float, float]:
+        """Travel actually available once the trim is applied.
+
+        A non-zero trim shifts the whole range, so it costs travel at one end.
+        Worth knowing because Hiwonder's own IK does not: it range-checks the
+        pulse *before* servosMove adds the trim, and will happily write past the
+        servo's limit at the far end of a joint's travel. We clamp instead, and
+        this is the honest statement of what that leaves.
+        """
+        if self.pulse_per_degree == 0:
+            return (0.0, 0.0)
+        edges = sorted(
+            (self.joint_deg_for(self.min_pulse), self.joint_deg_for(self.max_pulse))
+        )
+        return (
+            max(-JOINT_LIMIT_DEG, edges[0]),
+            min(JOINT_LIMIT_DEG, edges[1]),
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {

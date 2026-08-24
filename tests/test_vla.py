@@ -423,3 +423,17 @@ class IndividualWriteTest(unittest.TestCase):
         self.assertEqual(len(calls), 4)
         self.assertTrue(all(len(pairs) == 1 for _, pairs in calls))
         self.assertEqual([pairs[0][0] for _, pairs in calls], [6, 5, 4, 3])
+
+
+class ReachableTravelTest(unittest.TestCase):
+    def test_trim_costs_travel_at_one_end(self):
+        servo = ServoCalibration(channel=4, deviation_us=72.0)
+        low, high = servo.reachable_deg()
+        # +72 us of trim eats 72/11.111 = 6.5 deg off the top.
+        self.assertAlmostEqual(high, 90.0 - 72.0 / (2000 / 180), places=1)
+        self.assertAlmostEqual(low, -90.0, places=1)
+
+    def test_no_trim_leaves_full_travel(self):
+        low, high = ServoCalibration(channel=4).reachable_deg()
+        self.assertAlmostEqual(low, -90.0, places=3)
+        self.assertAlmostEqual(high, 90.0, places=3)

@@ -147,7 +147,12 @@ def check_against_sdk(arm_ik, profile, deviations: Dict[str, float]) -> Tuple[in
             ours = profile.servos[name].pulse_for(angle)
             # servosMove writes the IK value plus the trim, so that is what a
             # correct map has to reproduce -- not the raw IK value.
+            servo = profile.servos[name]
+            # Clamp their value the way we do before comparing: where the SDK
+            # would write past the servo's range, the difference is our refusal
+            # to do that, not a disagreement about the map.
             theirs = float(expected[f"servo{channel}"]) + deviations[name]
+            theirs = max(servo.min_pulse, min(servo.max_pulse, theirs))
             worst = max(worst, abs(ours - theirs))
     return checked, worst
 
@@ -194,6 +199,13 @@ def main() -> int:
     updated = CalibrationProfile(
         chassis=profile.chassis, arm=profile.arm, gripper=profile.gripper, servos=servos
     )
+
+    print("\nTravel available after trim:")
+    for name in JOINT_NAMES:
+        low, high = updated.servos[name].reachable_deg()
+        lost = (90.0 - high) + (low + 90.0)
+        note = f"   ({lost:.1f} deg lost to trim)" if lost > 0.5 else ""
+        print(f"  {name:>9}: {low:+.1f} to {high:+.1f} deg{note}")
 
     checked, worst_pulse = check_against_sdk(arm_ik, updated, deviations)
     print(f"\nCross-check on {checked} real IK poses: worst disagreement with the "
