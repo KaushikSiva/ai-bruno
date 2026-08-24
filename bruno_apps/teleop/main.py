@@ -192,23 +192,48 @@ def print_help(
     print("  ------------------------------------------------------------------\n")
 
 
-def read_key() -> str:
-    """Read one keypress, decoding arrow escape sequences to w/a/s/d."""
-    import termios
-    import tty
+class RawTerminal:
+    """Holds cbreak mode for a whole teleop session.
 
-    fd = sys.stdin.fileno()
-    saved = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        char = sys.stdin.read(1)
-        if char == "\x1b":  # escape sequence; arrows arrive as ESC [ A..D
-            if sys.stdin.read(1) == "[":
-                return ARROW_KEYS.get(sys.stdin.read(1), "")
-            return ""
-        return char
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+    Setting and restoring the mode around each individual read looks equivalent
+    but is not: keys pressed while output is printing land in a cooked terminal,
+    which echoes them and queues them for later. That shows up as stray
+    `kkkkkkkk` in the transcript and a burst of commands arriving after the
+    fact. cbreak rather than raw, so Ctrl-C stays a signal.
+    """
+
+    def __init__(self) -> None:
+        self._termios = None
+        self._fd = None
+        self._saved = None
+
+    def open(self) -> None:
+        import termios
+        import tty
+
+        self._termios = termios
+        self._fd = sys.stdin.fileno()
+        self._saved = termios.tcgetattr(self._fd)
+        tty.setcbreak(self._fd)
+        termios.tcflush(self._fd, termios.TCIFLUSH)  # drop anything already typed
+
+    def close(self) -> None:
+        if self._saved is not None:
+            self._termios.tcsetattr(self._fd, self._termios.TCSADRAIN, self._saved)
+            self._saved = None
+
+
+def read_key() -> str:
+    """Read one keypress, decoding arrows to w/a/s/d.
+
+    Expects the terminal to already be in cbreak mode; see RawTerminal.
+    """
+    char = sys.stdin.read(1)
+    if char == "\x1b":  # escape sequence; arrows arrive as ESC [ A..D
+        if sys.stdin.read(1) == "[":
+            return ARROW_KEYS.get(sys.stdin.read(1), "")
+        return ""
+    return char
 
 
 def action_for_binding(
@@ -303,6 +328,8 @@ def run_keys(session, args: argparse.Namespace) -> int:
     heartbeat = Heartbeat(session, idle_seconds=1.0)
     heartbeat.start()
     print_help(speed, duration_ms, angle, joint_step, supports_strafe)
+    terminal = RawTerminal()
+    terminal.open()
 
     try:
         while True:
@@ -343,6 +370,7 @@ def run_keys(session, args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        terminal.close()
         heartbeat.cancel()
         try:
             session.send(Action.stop("teleop exit"))
