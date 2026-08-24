@@ -40,16 +40,21 @@ from bruno_core.vla.kinematics import (
     JOINT_NAMES,
     JOINT_SERVO_CHANNELS,
     hiwonder_ik,
+    joint_degrees_to_servo_angles,
     servo_angles_to_joint_degrees,
 )
 
-# Poses spread across the workspace so every joint sweeps a useful range. A
-# joint that barely moves across the set cannot be fitted from it.
-SAMPLE_POSES: Tuple[Tuple[float, float, float, float], ...] = (
+# Sweep each joint across its travel with the others held neutral. Sampling
+# Cartesian poses instead would be a mistake: the SDK refuses most of them, and
+# the few it accepts can pin a joint inside a two-degree window, where the
+# pulses' integer rounding swamps the slope being fitted.
+SWEEP_DEGREES: Tuple[int, ...] = tuple(range(-85, 86, 5))
+
+# Real poses, used only to check the fitted map against the SDK end to end.
+CHECK_POSES: Tuple[Tuple[float, float, float, float], ...] = (
     (0, 6, 18, 0), (0, 8, 18, 0), (0, 10, 16, 0), (0, 12, 12, 0),
-    (0, 14, 8, -20), (0, 15, 6, -30), (0, 10, 20, 20), (0, 8, 22, 30),
-    (4, 8, 18, 0), (8, 10, 14, 0), (-4, 8, 18, 0), (-8, 10, 14, 0),
-    (6, 12, 10, -20), (-6, 12, 10, -20), (2, 7, 21, 15), (-2, 7, 21, 15),
+    (0, 15, 6, -30), (4, 8, 18, 0), (-4, 8, 18, 0), (2, 7, 21, 15),
+    (-2, 7, 21, 15), (0, 10, 20, 20),
 )
 
 
@@ -76,28 +81,53 @@ def load_arm_ik():
     return arm_ik
 
 
+def pulses_for(arm_ik, joints: Dict[str, float]):
+    """Ask the SDK what pulses one joint vector corresponds to. Nothing moves."""
+    ordered = tuple(joints[name] for name in JOINT_NAMES)
+    return arm_ik.transformAngelAdaptArm(*joint_degrees_to_servo_angles(ordered))
+
+
 def collect_samples(arm_ik) -> Dict[str, List[Tuple[float, float]]]:
-    """Pair each joint angle with the pulse the SDK would send for it."""
+    """Sweep each joint on its own and record the pulse the SDK computes."""
     samples: Dict[str, List[Tuple[float, float]]] = {name: [] for name in JOINT_NAMES}
-    skipped = 0
-    for x, y, z, pitch in SAMPLE_POSES:
-        solution = hiwonder_ik(x, y, z, pitch)
-        if solution is None:
-            skipped += 1
-            continue
-        theta3, theta4, theta5, theta6 = solution
-        pulses = arm_ik.transformAngelAdaptArm(theta3, theta4, theta5, theta6)
-        if not pulses:
-            skipped += 1
-            continue
-        joints = servo_angles_to_joint_degrees(theta3, theta4, theta5, theta6)
-        for name, angle in zip(JOINT_NAMES, joints):
+    rejected = 0
+    for name in JOINT_NAMES:
+        for angle in SWEEP_DEGREES:
+            joints = {other: 0.0 for other in JOINT_NAMES}
+            joints[name] = float(angle)
+            pulses = pulses_for(arm_ik, joints)
+            if not pulses:
+                rejected += 1
+                continue
             pulse = pulses.get(f"servo{JOINT_SERVO_CHANNELS[name]}")
             if pulse is not None:
-                samples[name].append((angle, float(pulse)))
-    if skipped:
-        print(f"  ({skipped} of {len(SAMPLE_POSES)} sample poses had no IK solution)")
+                samples[name].append((float(angle), float(pulse)))
+    if rejected:
+        print(f"  ({rejected} swept angles were outside the SDK's servo range)")
     return samples
+
+
+def check_against_sdk(arm_ik, profile) -> Tuple[int, float]:
+    """Confirm the fitted map reproduces the SDK's own pulses on real poses.
+
+    The fit is derived from single-joint sweeps, so this is the independent
+    check that it still holds for the multi-joint vectors real IK produces.
+    """
+    checked, worst = 0, 0.0
+    for x, y, z, pitch in CHECK_POSES:
+        solution = hiwonder_ik(x, y, z, pitch)
+        if solution is None:
+            continue
+        expected = arm_ik.transformAngelAdaptArm(*solution)
+        if not expected:
+            continue
+        joints = servo_angles_to_joint_degrees(*solution)
+        checked += 1
+        for name, angle in zip(JOINT_NAMES, joints):
+            channel = JOINT_SERVO_CHANNELS[name]
+            ours = profile.servos[name].pulse_for(angle)
+            worst = max(worst, abs(ours - float(expected[f"servo{channel}"])))
+    return checked, worst
 
 
 def main() -> int:
@@ -139,6 +169,14 @@ def main() -> int:
     updated = CalibrationProfile(
         chassis=profile.chassis, arm=profile.arm, gripper=profile.gripper, servos=servos
     )
+
+    checked, worst_pulse = check_against_sdk(arm_ik, updated)
+    print(f"\nCross-check on {checked} real IK poses: worst disagreement with the "
+          f"SDK's own pulses is {worst_pulse:.1f} us")
+    if worst_pulse > 1.0:
+        all_verified = False
+        print("  That is too large -- the fitted map does not reproduce the SDK.")
+
     if not args.write:
         print("\nNothing written. Re-run with --write to save this into the config.")
         return 0
