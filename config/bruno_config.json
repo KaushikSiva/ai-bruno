@@ -162,6 +162,7 @@
                 "center_pulse": 1500.0,
                 "pulse_per_degree": 11.11036,
                 "sign": 1,
+                "deviation_us": -95.0,
                 "min_pulse": 500,
                 "max_pulse": 2500,
                 "verified": true
@@ -171,6 +172,7 @@
                 "center_pulse": 1500.0,
                 "pulse_per_degree": 11.11036,
                 "sign": 1,
+                "deviation_us": 63.0,
                 "min_pulse": 500,
                 "max_pulse": 2500,
                 "verified": true
@@ -180,6 +182,7 @@
                 "center_pulse": 1500.0,
                 "pulse_per_degree": 11.11036,
                 "sign": 1,
+                "deviation_us": 72.0,
                 "min_pulse": 500,
                 "max_pulse": 2500,
                 "verified": true
@@ -189,6 +192,7 @@
                 "center_pulse": 1500.0,
                 "pulse_per_degree": 11.11036,
                 "sign": -1,
+                "deviation_us": 59.0,
                 "min_pulse": 500,
                 "max_pulse": 2500,
                 "verified": true
