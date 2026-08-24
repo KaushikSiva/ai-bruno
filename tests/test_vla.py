@@ -437,3 +437,32 @@ class ReachableTravelTest(unittest.TestCase):
         low, high = ServoCalibration(channel=4).reachable_deg()
         self.assertAlmostEqual(low, -90.0, places=3)
         self.assertAlmostEqual(high, 90.0, places=3)
+
+
+class ChassisRotationSignTest(unittest.TestCase):
+    """Measured on the floor: a positive angle must turn the robot left."""
+
+    def _rate_for(self, angle_deg):
+        from bruno_core.vla.drivers.hardware import HardwareDriver
+
+        sent = []
+
+        class RecordingChassis:
+            def set_velocity(self, speed, direction_deg, rotation):
+                sent.append((speed, direction_deg, rotation))
+
+            def stop(self):
+                pass
+
+        driver = HardwareDriver(dry_run=True)
+        driver.chassis = RecordingChassis()
+        driver.apply(action(action="rotate_by_deg", angle_deg=angle_deg,
+                            speed=0.5, duration_ms=400))
+        return sent[-1][2]
+
+    def test_positive_angle_sends_a_positive_rate(self):
+        # Hiwonder's angular_rate is counter-clockwise-positive, same as ours.
+        self.assertGreater(self._rate_for(45), 0.0)
+
+    def test_negative_angle_sends_a_negative_rate(self):
+        self.assertLess(self._rate_for(-45), 0.0)

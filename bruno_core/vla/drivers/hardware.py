@@ -104,14 +104,20 @@ class HardwareDriver(BaseDriver):
         """Translate a body-frame velocity into MasterPi's set_velocity call.
 
         Hiwonder takes a speed magnitude, a heading in degrees where 0 is the
-        robot's right and 90 is straight ahead, and an angular rate. Their
-        angular rate is positive *clockwise* -- the opposite of this repo's
-        counter-clockwise-positive contract -- hence the negation.
+        robot's right and 90 is straight ahead, and an angular rate.
+
+        That angular rate is positive counter-clockwise, the same convention
+        this repo uses, so it passes through unchanged. This was measured on the
+        floor, not assumed: an earlier negation here turned a commanded +45 into
+        45 degrees to the right. Note that it also contradicts
+        `bruno_core/motion/mecanum.py`, whose `turn_left` passes a negative rate
+        and `turn_right` a positive one -- those two labels look swapped, but
+        other apps may be built around them, so they are left alone.
         """
         speed_cmps = math.hypot(vx_cmps, vy_cmps)
         magnitude = speed_cmps * self.profile.chassis.real_velocity_units_per_cmps
         direction_deg = math.degrees(math.atan2(vy_cmps, vx_cmps)) % 360.0 if magnitude else 90.0
-        rotation = -wz_deg_s * self.profile.chassis.real_rotation_units_per_deg_per_s
+        rotation = wz_deg_s * self.profile.chassis.real_rotation_units_per_deg_per_s
         self.chassis.set_velocity(magnitude, direction_deg, rotation)
 
     def _set_cartesian(

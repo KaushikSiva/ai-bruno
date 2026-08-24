@@ -54,9 +54,20 @@ REP-103.
 
 Note that this is a deliberate break from the upstream `bruno_vla` project's
 v2 schema, which defined chassis rotation as positive-clockwise while every
-arm joint used the opposite convention. Hiwonder's `set_velocity` is also
-clockwise-positive; the negation lives in `HardwareDriver._drive` and nowhere
-else.
+arm joint used the opposite convention.
+
+Hiwonder's `set_velocity` turns out to take a counter-clockwise-positive
+angular rate too, so the rate passes through unchanged. This was measured on the
+floor rather than assumed: `HardwareDriver._drive` originally negated it, on the
+belief that Hiwonder was clockwise-positive, and a commanded `+45` turned the
+robot 45 degrees to the *right*.
+
+Two things made that hard to catch earlier. With the wheels raised there is no
+body rotation to observe -- only the wheels spinning, which look the same either
+way unless you know which side is which. And `bruno_core/motion/mecanum.py`
+supports the wrong belief: its `turn_left` passes a negative rate and
+`turn_right` a positive one. Those labels appear to be swapped, but the rover
+and face-follower apps may be built around them, so they are left as they are.
 
 ## What you must calibrate
 
@@ -173,13 +184,6 @@ it; the action contract issues one or the other, never both.
 the arm somewhere IK would not have chosen, the next Cartesian jog re-solves
 from the pose and may reconfigure the arm. `ArmState` logs a warning when a jog
 moves any joint by more than 45°.
-
-**Chassis rotation direction is unverified on hardware.** `rotate_by_deg` is
-positive counter-clockwise, and `HardwareDriver._drive` negates the rate because
-Hiwonder's `set_velocity` is clockwise-positive. Both directions have been
-confirmed to spin the wheels, but which way the *body* turns cannot be observed
-with the wheels raised, and has not yet been checked on the floor. Verify before
-trusting a signed rotation.
 
 **Put the arm at home before the first command.** Arm state is not persisted
 between processes: every teleop invocation assumes the arm starts at the
