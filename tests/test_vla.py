@@ -466,3 +466,57 @@ class ChassisRotationSignTest(unittest.TestCase):
 
     def test_negative_angle_sends_a_negative_rate(self):
         self.assertLess(self._rate_for(-45), 0.0)
+
+
+class StopHardeningTest(unittest.TestCase):
+    """A stop that is silently dropped leaves the robot driving."""
+
+    def _driver_with(self, chassis):
+        from bruno_core.vla.drivers.hardware import HardwareDriver
+
+        driver = HardwareDriver(dry_run=True)
+        driver.chassis = chassis
+        return driver
+
+    def test_stop_is_sent_more_than_once(self):
+        from bruno_core.vla.drivers import hardware
+
+        class CountingChassis:
+            def __init__(self):
+                self.stops = 0
+
+            def set_velocity(self, *args):
+                pass
+
+            def stop(self):
+                self.stops += 1
+
+        chassis = CountingChassis()
+        self._driver_with(chassis).stop()
+        self.assertEqual(chassis.stops, hardware.STOP_REPEAT_COUNT)
+
+    def test_one_failed_attempt_does_not_raise_if_another_succeeds(self):
+        class FlakyChassis:
+            def __init__(self):
+                self.calls = 0
+
+            def set_velocity(self, *args):
+                pass
+
+            def stop(self):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("dropped write")
+
+        self._driver_with(FlakyChassis()).stop()  # must not raise
+
+    def test_total_failure_still_raises(self):
+        class DeadChassis:
+            def set_velocity(self, *args):
+                pass
+
+            def stop(self):
+                raise RuntimeError("bus down")
+
+        with self.assertRaises(RuntimeError):
+            self._driver_with(DeadChassis()).stop()

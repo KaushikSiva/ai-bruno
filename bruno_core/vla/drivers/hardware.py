@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from ..calibration import CalibrationProfile
@@ -32,6 +33,11 @@ from ..kinematics import JOINT_NAMES, JointDegrees
 from .base import BaseDriver
 
 LOG = logging.getLogger("bruno_core.vla.drivers.hardware")
+
+# A dropped stop leaves the motors running, and nothing reports it. Send it
+# more than once rather than trusting a write we cannot confirm.
+STOP_REPEAT_COUNT = 3
+STOP_REPEAT_DELAY_S = 0.05
 
 
 class UncalibratedJoint(RuntimeError):
@@ -92,7 +98,17 @@ class HardwareDriver(BaseDriver):
             return _DryChassis()
         try:
             from bruno_core.motion.mecanum import MecanumWrapper
+            import common.mecanum as masterpi_mecanum  # type: ignore
 
+            # MasterPi drops writes when the serial receive thread is not
+            # running. For a servo that means a motion is missed; for the
+            # chassis it means a *stop* is missed and the robot keeps driving.
+            board = getattr(masterpi_mecanum, "board", None)
+            if board is not None and hasattr(board, "enable_reception"):
+                try:
+                    board.enable_reception()
+                except Exception as exc:
+                    LOG.warning("Could not enable board reception: %s", exc)
             return MecanumWrapper()
         except Exception as exc:
             LOG.error("MasterPi chassis unavailable (%s); falling back to dry mode", exc)
@@ -164,9 +180,26 @@ class HardwareDriver(BaseDriver):
         }
 
     def stop(self) -> None:
+        """Stop the chassis, and do not take the first attempt on trust.
+
+        A MasterPi write can be silently dropped, and `MecanumWrapper.stop`
+        swallows any error, so a single stop that never reached the motors is
+        indistinguishable from one that did. The robot then keeps driving at its
+        last duty while every layer above believes it has halted -- the failure
+        that ran a robot into a wall during bring-up. Repeating the command is
+        the cheapest insurance available, since there is no feedback to check.
+        """
         super().stop()
-        try:
-            self.chassis.stop()
-        except Exception as exc:  # a failed stop must be visible, not swallowed
-            LOG.error("Chassis stop failed: %s", exc)
-            raise
+        errors = []
+        for attempt in range(STOP_REPEAT_COUNT):
+            try:
+                self.chassis.stop()
+            except Exception as exc:
+                errors.append(exc)
+            if attempt + 1 < STOP_REPEAT_COUNT:
+                time.sleep(STOP_REPEAT_DELAY_S)
+        if len(errors) == STOP_REPEAT_COUNT:
+            LOG.error("Every chassis stop attempt failed: %s", errors[-1])
+            raise errors[-1]
+        if errors:
+            LOG.warning("%d of %d chassis stop attempts failed", len(errors), STOP_REPEAT_COUNT)
