@@ -581,3 +581,46 @@ class StrafeGuardTest(unittest.TestCase):
 
     def test_strafe_allowed_by_default(self):
         self._driver(True).apply(action(action="left", speed=0.3, duration_ms=300))
+
+
+class TeleopBindingTest(unittest.TestCase):
+    """Every interactive key must produce an action the contract accepts.
+
+    The Cartesian arm jogs were shipped broken in interactive mode: their speed
+    was zeroed on the strength of POSITION_ACTIONS, which they belong to, while
+    the contract requires a positive speed because it scales their step. Walking
+    the whole binding table is what catches that class of mistake.
+    """
+
+    def test_every_binding_parses(self):
+        from bruno_apps.teleop.main import KEY_BINDINGS, action_for_binding
+
+        for key, (binding, label) in KEY_BINDINGS.items():
+            with self.subTest(key=key, binding=binding):
+                built = action_for_binding(binding, speed=0.3, duration_ms=400,
+                                           angle=15.0, joint_step=10.0)
+                self.assertIsInstance(built, Action)
+
+    def test_arm_jogs_keep_a_positive_speed(self):
+        from bruno_apps.teleop.main import action_for_binding
+
+        for binding in ("move_arm_up", "move_arm_down", "move_arm_left",
+                        "move_arm_right", "move_arm_forward", "move_arm_backward"):
+            with self.subTest(binding=binding):
+                built = action_for_binding(binding, 0.3, 400, 15.0, 10.0)
+                self.assertGreater(built.speed, 0.0)
+
+    def test_grippers_and_joint_rotations_carry_no_speed(self):
+        from bruno_apps.teleop.main import action_for_binding
+
+        for binding in ("open_gripper", "close_gripper", "home_arm", "joint:base:+"):
+            with self.subTest(binding=binding):
+                self.assertEqual(action_for_binding(binding, 0.3, 400, 15.0, 10.0).speed, 0.0)
+
+    def test_every_binding_survives_a_driver(self):
+        from bruno_apps.teleop.main import KEY_BINDINGS, action_for_binding
+
+        driver = MockDriver()
+        for key, (binding, label) in KEY_BINDINGS.items():
+            with self.subTest(key=key, binding=binding):
+                driver.apply(action_for_binding(binding, 0.3, 400, 15.0, 10.0))

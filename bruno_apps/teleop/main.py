@@ -51,6 +51,7 @@ from bruno_core.vla.contracts import (
     HOME_ARM_ACTION,
     POSITION_ACTIONS,
     ROTATION_ACTION,
+    ZERO_SPEED_ACTIONS,
     Action,
 )
 from bruno_core.vla.controller import RobotController, RobotNotArmed, limits_from_env
@@ -130,7 +131,7 @@ def build_action(args: argparse.Namespace) -> Action:
         "confidence": 1.0,
         "reason": "manual teleop command",
     }
-    if args.command in GRIPPER_ACTIONS or args.command == HOME_ARM_ACTION:
+    if args.command in ZERO_SPEED_ACTIONS:
         payload["speed"] = 0.0
     return Action.from_dict(payload)
 
@@ -210,6 +211,39 @@ def read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
+def action_for_binding(
+    binding: str, speed: float, duration_ms: int, angle: float, joint_step: float
+) -> Action:
+    """Turn one key binding into an Action.
+
+    Module level so the tests can walk every binding in KEY_BINDINGS and check
+    it parses. Speed is zeroed only for the actions the contract forbids it on:
+    the Cartesian arm jogs need a positive speed, because that is what scales
+    their step.
+    """
+    if binding == "stop":
+        return Action.stop("teleop stop")
+    if binding.startswith("joint:"):
+        _, joint, sign = binding.split(":")
+        return Action.from_dict({
+            "action": ARM_ROTATION_ACTION, "joint": joint,
+            "angle_deg": joint_step if sign == "+" else -joint_step,
+            "duration_ms": max(duration_ms, 300), "confidence": 1.0, "reason": "teleop",
+        })
+    if binding in ("rotate_ccw", "rotate_cw"):
+        return Action.from_dict({
+            "action": ROTATION_ACTION, "speed": speed,
+            "angle_deg": angle if binding == "rotate_ccw" else -angle,
+            "duration_ms": duration_ms, "confidence": 1.0, "reason": "teleop",
+        })
+    return Action.from_dict({
+        "action": binding,
+        "speed": 0.0 if binding in ZERO_SPEED_ACTIONS else speed,
+        "duration_ms": max(duration_ms, 300) if binding in POSITION_ACTIONS else duration_ms,
+        "confidence": 1.0, "reason": "teleop",
+    })
+
+
 class Heartbeat(threading.Thread):
     """Keeps the bridge armed while idle, so the dead-man still means something.
 
@@ -270,29 +304,6 @@ def run_keys(session, args: argparse.Namespace) -> int:
     heartbeat.start()
     print_help(speed, duration_ms, angle, joint_step, supports_strafe)
 
-    def dispatch(binding: str) -> Optional[Action]:
-        if binding == "stop":
-            return Action.stop("teleop stop")
-        if binding.startswith("joint:"):
-            _, joint, sign = binding.split(":")
-            return Action.from_dict({
-                "action": ARM_ROTATION_ACTION, "joint": joint,
-                "angle_deg": joint_step if sign == "+" else -joint_step,
-                "duration_ms": max(duration_ms, 300), "confidence": 1.0, "reason": "teleop",
-            })
-        if binding in ("rotate_ccw", "rotate_cw"):
-            return Action.from_dict({
-                "action": ROTATION_ACTION, "speed": speed,
-                "angle_deg": angle if binding == "rotate_ccw" else -angle,
-                "duration_ms": duration_ms, "confidence": 1.0, "reason": "teleop",
-            })
-        return Action.from_dict({
-            "action": binding,
-            "speed": 0.0 if binding in POSITION_ACTIONS else speed,
-            "duration_ms": max(duration_ms, 300) if binding in POSITION_ACTIONS else duration_ms,
-            "confidence": 1.0, "reason": "teleop",
-        })
-
     try:
         while True:
             key = read_key()
@@ -314,7 +325,9 @@ def run_keys(session, args: argparse.Namespace) -> int:
 
             binding, label = KEY_BINDINGS[key]
             try:
-                result = session.send(dispatch(binding))
+                result = session.send(
+                    action_for_binding(binding, speed, duration_ms, angle, joint_step)
+                )
             except RobotNotArmed:
                 print("  disarmed by the watchdog; re-arming")
                 session.set_armed(True)

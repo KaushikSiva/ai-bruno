@@ -55,6 +55,14 @@ ARM_ACTIONS = frozenset({ARM_ROTATION_ACTION, HOME_ARM_ACTION} | ARM_CARTESIAN_A
 
 GRIPPER_ACTIONS = frozenset({"open_gripper", "close_gripper"})
 
+# Actions the contract forces to zero speed. Cartesian arm jogs are absent on
+# purpose: their speed scales the step size, so zero is rejected. Callers should
+# use this rather than POSITION_ACTIONS, which is a different question -- one is
+# "does speed apply", the other "is this a position target".
+ZERO_SPEED_ACTIONS = frozenset(
+    GRIPPER_ACTIONS | {HOME_ARM_ACTION, ARM_ROTATION_ACTION}
+)
+
 # Actions whose motion is a position target rather than a timed velocity. These
 # cannot be recalled once issued, which is why the dead-man timer is not a
 # substitute for a physical emergency stop during manipulator work.
