@@ -169,11 +169,18 @@ KEY_BINDINGS = {
 ARROW_KEYS = {"A": "w", "B": "s", "D": "a", "C": "d"}  # up, down, left, right
 
 
-def print_help(speed: float, duration_ms: int, angle: float, joint_step: float) -> None:
+def print_help(
+    speed: float, duration_ms: int, angle: float, joint_step: float,
+    supports_strafe: bool = True,
+) -> None:
     print("\n  Bruno teleop")
     print(f"  speed {speed:.2f} | burst {duration_ms} ms | turn {angle:.0f} deg | joint step {joint_step:.0f} deg")
     print("  ------------------------------------------------------------------")
-    print("   w/s/a/d or arrows   drive forward / back / strafe left / right")
+    if supports_strafe:
+        print("   w/s/a/d or arrows   drive forward / back / strafe left / right")
+    else:
+        print("   w/s or up/down      drive forward / back")
+        print("   a/d                 strafe -- UNAVAILABLE on this chassis (wheels)")
     print("   q / e               turn left / right by the angle step")
     print("   i/k  j/l  u/o       arm up/down, left/right, out/in")
     print("   1..8                jog base, shoulder, elbow, wrist by degrees")
@@ -257,10 +264,11 @@ def run_keys(session, args: argparse.Namespace) -> int:
     speed, duration_ms = args.speed, args.duration_ms
     angle, joint_step = args.angle or 15.0, args.joint_step
 
+    supports_strafe = getattr(session.profile.chassis, "supports_strafe", True)
     session.set_armed(True)
     heartbeat = Heartbeat(session, idle_seconds=1.0)
     heartbeat.start()
-    print_help(speed, duration_ms, angle, joint_step)
+    print_help(speed, duration_ms, angle, joint_step, supports_strafe)
 
     def dispatch(binding: str) -> Optional[Action]:
         if binding == "stop":
@@ -291,7 +299,7 @@ def run_keys(session, args: argparse.Namespace) -> int:
             if key in ("x", "\x03", "\x04"):
                 break
             if key == "?":
-                print_help(speed, duration_ms, angle, joint_step)
+                print_help(speed, duration_ms, angle, joint_step, supports_strafe)
                 continue
             if key in ("+", "="):
                 speed = min(1.0, round(speed + 0.05, 2)); print(f"  speed {speed:.2f}"); continue
@@ -312,7 +320,10 @@ def run_keys(session, args: argparse.Namespace) -> int:
                 session.set_armed(True)
                 continue
             except Exception as exc:
-                print(f"  {label}: refused -- {exc}")
+                # Driver refusals carry a full explanation; one line is enough
+                # here, and the docs hold the rest.
+                detail = str(exc).split(",")[0].split(".")[0][:90]
+                print(f"  {label}: refused -- {detail}")
                 continue
             heartbeat.touch()
             print(f"  {label:<28} {summarize(result)}")
