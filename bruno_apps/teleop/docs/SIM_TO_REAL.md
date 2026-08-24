@@ -143,6 +143,21 @@ the arm somewhere IK would not have chosen, the next Cartesian jog re-solves
 from the pose and may reconfigure the arm. `ArmState` logs a warning when a jog
 moves any joint by more than 45°.
 
+**Put the arm at home before the first command.** Arm state is not persisted
+between processes: every teleop invocation assumes the arm starts at the
+configured home pose, and a joint command writes all four channels, not just
+the one being rotated. So if the arm is physically somewhere else, the first
+command moves it to home-plus-delta rather than nudging it from where it is --
+over the command's duration, which may be fast. Either place the arm at home by
+hand first, or make `home_arm` your first command with a generous duration:
+
+```bash
+python3 bruno_apps/teleop/main.py --target real home_arm --duration-ms 2000
+```
+
+Interactive `keys` mode keeps state for the length of the session, so this only
+bites on the first command of each new process.
+
 **Arm state is commanded, not measured.** The simulator can read true joint
 angles back out of the model; the MasterPi's PWM servos have no feedback path
 at all. `tcp_estimate_cm` on hardware is forward kinematics on what we asked

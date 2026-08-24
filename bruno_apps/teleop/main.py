@@ -22,6 +22,10 @@ One-shot commands take the same flags:
 Rotation is positive counter-clockwise: +45 turns left, -45 turns right, for
 the chassis and for the arm's base joint alike.
 
+Arm state is not persisted between runs: each invocation assumes the arm starts
+at the configured home pose, and a joint command writes all four channels. Put
+the arm at home first, or lead with `home_arm --duration-ms 2000`.
+
 Pass --robot-url to drive a bridge running elsewhere (the robot on the LAN, or
 a simulator in another terminal) instead of opening a driver in this process.
 """
