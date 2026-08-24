@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional
 
 from ..calibration import CalibrationProfile
 from ..kinematics import JOINT_NAMES, JointDegrees
-from .base import BaseDriver
+from .base import BaseDriver, StrafeUnavailable  # noqa: F401  (re-exported)
 
 LOG = logging.getLogger("bruno_core.vla.drivers.hardware")
 

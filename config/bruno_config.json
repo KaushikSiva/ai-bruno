@@ -133,7 +133,8 @@
             "max_linear_speed_cmps": 30.0,
             "max_rotation_deg_per_s": 90.0,
             "real_velocity_units_per_cmps": 10.0,
-            "real_rotation_units_per_deg_per_s": 0.017453292519943295
+            "real_rotation_units_per_deg_per_s": 0.017453292519943295,
+            "supports_strafe": false
         },
         "arm": {
             "home_position": [0.0, 6.0, 18.0],

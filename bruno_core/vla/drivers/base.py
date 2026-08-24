@@ -41,6 +41,16 @@ from ..kinematics import JointDegrees
 LOG = logging.getLogger("bruno_core.vla.drivers")
 
 
+class StrafeUnavailable(RuntimeError):
+    """The chassis cannot translate sideways with its current wheels.
+
+    Enforced here rather than in the hardware driver so simulation refuses it
+    too. A sim that happily strafes a robot whose wheels cannot is no longer
+    predicting anything -- it is the difference between a rehearsal and a
+    daydream.
+    """
+
+
 @runtime_checkable
 class MotionDriver(Protocol):
     def apply(self, action: Action) -> None: ...
@@ -115,6 +125,14 @@ class BaseDriver:
             self._last_action = action
 
     def _apply_translation(self, action: Action) -> None:
+        if action.action in ("left", "right") and not self.profile.chassis.supports_strafe:
+            raise StrafeUnavailable(
+                "this chassis cannot strafe: its wheel rollers are mounted parallel "
+                "rather than in an X, so a sideways command turns the robot instead "
+                "of sliding it. Re-mount the wheels (front-left and rear-right share "
+                "one roller direction, front-right and rear-left the other), then set "
+                "vla.chassis.supports_strafe back to true"
+            )
         speed_cmps = self.profile.chassis.linear_cmps(action.speed)
         # +x is the robot's right, +y is straight ahead, matching the arm frame.
         vx, vy = {
@@ -217,4 +235,10 @@ class MockDriver(BaseDriver):
         }
 
 
-__all__ = ["ArmTargetUnreachable", "BaseDriver", "MockDriver", "MotionDriver"]
+__all__ = [
+    "ArmTargetUnreachable",
+    "BaseDriver",
+    "MockDriver",
+    "MotionDriver",
+    "StrafeUnavailable",
+]

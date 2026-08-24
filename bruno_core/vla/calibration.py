@@ -117,6 +117,11 @@ class ChassisCalibration:
     # MasterPi's mecanum.set_velocity takes mm/s and rad/s, hence 10 and pi/180.
     real_velocity_units_per_cmps: float = 10.0
     real_rotation_units_per_deg_per_s: float = math.pi / 180.0
+    # Strafing needs the wheel rollers to form an X seen from above. Mounted
+    # parallel, the sideways components make a torque instead of a translation
+    # and the robot spins when asked to slide. Set false and left/right are
+    # refused rather than quietly turning the robot.
+    supports_strafe: bool = True
 
     def linear_cmps(self, speed: float) -> float:
         return max(0.0, min(1.0, speed)) * self.max_linear_speed_cmps
@@ -215,19 +220,19 @@ class CalibrationProfile:
         defaults = cls()
 
         chassis_raw = block.get("chassis") or {}
-        chassis = replace(
-            defaults.chassis,
-            **{
-                key: float(chassis_raw[key])
-                for key in (
-                    "max_linear_speed_cmps",
-                    "max_rotation_deg_per_s",
-                    "real_velocity_units_per_cmps",
-                    "real_rotation_units_per_deg_per_s",
-                )
-                if key in chassis_raw
-            },
-        )
+        chassis_kwargs: Dict[str, Any] = {
+            key: float(chassis_raw[key])
+            for key in (
+                "max_linear_speed_cmps",
+                "max_rotation_deg_per_s",
+                "real_velocity_units_per_cmps",
+                "real_rotation_units_per_deg_per_s",
+            )
+            if key in chassis_raw
+        }
+        if "supports_strafe" in chassis_raw:
+            chassis_kwargs["supports_strafe"] = bool(chassis_raw["supports_strafe"])
+        chassis = replace(defaults.chassis, **chassis_kwargs)
 
         arm_raw = block.get("arm") or {}
         arm_kwargs: Dict[str, Any] = {}
@@ -277,6 +282,7 @@ class CalibrationProfile:
                 "max_rotation_deg_per_s": self.chassis.max_rotation_deg_per_s,
                 "real_velocity_units_per_cmps": self.chassis.real_velocity_units_per_cmps,
                 "real_rotation_units_per_deg_per_s": self.chassis.real_rotation_units_per_deg_per_s,
+                "supports_strafe": self.chassis.supports_strafe,
             },
             "arm": {
                 "home_position": list(self.arm.home_position),

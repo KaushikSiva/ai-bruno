@@ -171,6 +171,30 @@ runs on the pre-trim value, so at the extremes it will write past a servo's own
 limit. This driver clamps instead, and `calibrate_joints.py` prints what travel
 each joint actually has left.
 
+## This chassis cannot strafe
+
+`vla.chassis.supports_strafe` is **false** on this robot, and `left`/`right` are
+refused with an explanation rather than executed.
+
+Mecanum wheels only translate sideways when their rollers form an **X** viewed
+from above: front-left and rear-right share one roller direction, front-right
+and rear-left the other. On this robot they are mounted parallel, so the
+sideways force components add into a torque instead of cancelling into
+translation, and a strafe command spins the robot. Nothing in software can
+correct that.
+
+The symptom pattern is diagnostic, and worth recognising on any mecanum base:
+forward, backward, and rotation all work perfectly, because none of them depend
+on roller geometry. Strafing is the only motion that does, so it is the only one
+that fails.
+
+To fix it, re-mount the wheels so the top rollers form an X, then set
+`supports_strafe` back to true.
+
+The flag lives in the shared driver layer rather than the hardware driver, so
+simulation refuses the command too. A sim that strafes a robot which cannot is
+not predicting anything.
+
 ## Known limitations
 
 **The MJCF base joints are world-frame.** The model gives the chassis

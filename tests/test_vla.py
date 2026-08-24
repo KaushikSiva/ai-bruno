@@ -547,3 +547,37 @@ class EnvLimitsTest(unittest.TestCase):
             action(action="rotate_by_deg", angle_deg=150, speed=0.5, duration_ms=400)
         )
         self.assertEqual(result["executed"]["angle_deg"], 90.0)
+
+
+class StrafeGuardTest(unittest.TestCase):
+    """A sideways command that silently rotates the robot is a hazard."""
+
+    def _driver(self, supports_strafe, kind="mock"):
+        from bruno_core.vla.calibration import ChassisCalibration
+        from bruno_core.vla.drivers.hardware import HardwareDriver
+
+        profile = CalibrationProfile(
+            chassis=ChassisCalibration(supports_strafe=supports_strafe)
+        )
+        if kind == "mock":
+            return MockDriver(profile)
+        return HardwareDriver(profile=profile, dry_run=True)
+
+    def test_strafe_is_refused_by_every_driver(self):
+        from bruno_core.vla.drivers.base import StrafeUnavailable
+
+        # Simulation has to refuse it too, or it stops predicting the robot.
+        for kind in ("mock", "hardware"):
+            driver = self._driver(False, kind)
+            for command in ("left", "right"):
+                with self.subTest(kind=kind, command=command):
+                    with self.assertRaises(StrafeUnavailable):
+                        driver.apply(action(action=command, speed=0.3, duration_ms=300))
+
+    def test_forward_and_rotation_still_work_without_strafe(self):
+        driver = self._driver(False)
+        driver.apply(action(action="up", speed=0.3, duration_ms=300))
+        driver.apply(action(action="rotate_by_deg", angle_deg=45, speed=0.3, duration_ms=300))
+
+    def test_strafe_allowed_by_default(self):
+        self._driver(True).apply(action(action="left", speed=0.3, duration_ms=300))
