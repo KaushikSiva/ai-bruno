@@ -129,6 +129,37 @@ python3 bruno_apps/teleop/sim_real_check.py --hardware none  # sim only
 arithmetic without a robot attached, so a pose the MasterPi would refuse shows
 up before you are standing next to the hardware.
 
+## What simulation cannot tell you
+
+Bringing the arm up on hardware turned up a defect that no amount of simulation
+would ever have caught, and it is worth understanding why.
+
+The MasterPi stores a per-servo trim, `deviation_data`, which
+`ArmIK.servosMove` adds to every pulse it writes. On this robot it is
+`{3: +59, 4: +72, 5: +63, 6: -95}`. Calibration originally read
+`transformAngelAdaptArm`, which returns the value *before* that trim, so every
+pulse the driver wrote landed up to 8.5 degrees from where the robot's own IK
+would have put it.
+
+Sim and hardware agreed perfectly the whole time. Both computed the same joint
+angles from the same command, and `sim_real_check.py` reported no disagreement,
+because it compares commanded joints -- which were right. The error lived
+entirely in the last step, turning a correct joint angle into a pulse, and only
+the physical arm knew about it. It first showed up as an operator saying the
+base looked about fifteen degrees off centre.
+
+The lesson generalises: a shared contract makes sim predictive of *what will be
+commanded*, never of *what the hardware will do with it*. Anything downstream of
+the joint angle -- trim, backlash, a servo's true travel, gravity droop -- is
+outside simulation's reach by construction. Test those on the robot, and treat
+a clean sim run as evidence about your logic, not about your machine.
+
+A second consequence: because the trim shifts a servo's whole pulse range, it
+costs travel at one end. Hiwonder does not account for this -- its range check
+runs on the pre-trim value, so at the extremes it will write past a servo's own
+limit. This driver clamps instead, and `calibrate_joints.py` prints what travel
+each joint actually has left.
+
 ## Known limitations
 
 **The MJCF base joints are world-frame.** The model gives the chassis
@@ -142,6 +173,13 @@ it; the action contract issues one or the other, never both.
 the arm somewhere IK would not have chosen, the next Cartesian jog re-solves
 from the pose and may reconfigure the arm. `ArmState` logs a warning when a jog
 moves any joint by more than 45°.
+
+**Chassis rotation direction is unverified on hardware.** `rotate_by_deg` is
+positive counter-clockwise, and `HardwareDriver._drive` negates the rate because
+Hiwonder's `set_velocity` is clockwise-positive. Both directions have been
+confirmed to spin the wheels, but which way the *body* turns cannot be observed
+with the wheels raised, and has not yet been checked on the floor. Verify before
+trusting a signed rotation.
 
 **Put the arm at home before the first command.** Arm state is not persisted
 between processes: every teleop invocation assumes the arm starts at the
