@@ -39,24 +39,41 @@ DEGREES_PER_RADIAN = 180.0 / math.pi
 
 @dataclass(frozen=True)
 class ServoCalibration:
-    """Maps one arm joint angle in degrees to a PWM pulse on its channel."""
+    """Maps one arm joint angle in degrees to a PWM pulse on its channel.
+
+    ``deviation_us`` is the robot's own stored servo trim, read from the
+    MasterPi SDK's ``deviation_data``. Hiwonder's ``ArmIK.servosMove`` adds it
+    to every pulse it writes, so anything driving the servos directly has to as
+    well or it lands somewhere else entirely -- this robot's base trim is -95
+    us, which is 8.5 degrees of error at the shoulder of the arm.
+
+    Unlike the rest of this profile it is a property of one physical robot, not
+    of the MasterPi design. Copying a config to a second Bruno means re-reading
+    its deviations; everything else transfers.
+    """
 
     channel: int
     center_pulse: float = 1500.0
     pulse_per_degree: float = DEFAULT_PULSE_PER_DEGREE
     sign: int = 1
+    deviation_us: float = 0.0
     min_pulse: int = 500
     max_pulse: int = 2500
     verified: bool = False
 
     def pulse_for(self, joint_deg: float) -> int:
-        raw = self.center_pulse + self.sign * clamp_joint_deg(joint_deg) * self.pulse_per_degree
+        raw = (
+            self.center_pulse
+            + self.deviation_us
+            + self.sign * clamp_joint_deg(joint_deg) * self.pulse_per_degree
+        )
         return int(round(max(self.min_pulse, min(self.max_pulse, raw))))
 
     def joint_deg_for(self, pulse: float) -> float:
         if self.pulse_per_degree == 0:
             return 0.0
-        return (float(pulse) - self.center_pulse) / (self.sign * self.pulse_per_degree)
+        offset = float(pulse) - self.center_pulse - self.deviation_us
+        return offset / (self.sign * self.pulse_per_degree)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -64,6 +81,7 @@ class ServoCalibration:
             "center_pulse": round(self.center_pulse, 3),
             "pulse_per_degree": round(self.pulse_per_degree, 5),
             "sign": self.sign,
+            "deviation_us": round(self.deviation_us, 3),
             "min_pulse": self.min_pulse,
             "max_pulse": self.max_pulse,
             "verified": self.verified,
@@ -226,6 +244,7 @@ class CalibrationProfile:
                 center_pulse=float(entry.get("center_pulse", 1500.0)),
                 pulse_per_degree=float(entry.get("pulse_per_degree", DEFAULT_PULSE_PER_DEGREE)),
                 sign=1 if int(entry.get("sign", 1)) >= 0 else -1,
+                deviation_us=float(entry.get("deviation_us", 0.0)),
                 min_pulse=int(entry.get("min_pulse", 500)),
                 max_pulse=int(entry.get("max_pulse", 2500)),
                 verified=bool(entry.get("verified", False)),

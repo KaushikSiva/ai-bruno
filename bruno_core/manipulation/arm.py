@@ -158,9 +158,13 @@ class ArmController:
     def set_servos(self, targets: Sequence[Sequence[int]], move_time: Optional[float] = None) -> bool:
         """Drive one or more PWM channels to raw pulse widths together.
 
-        `targets` is a sequence of `(channel, pulse)` pairs, matching the shape
-        `pwm_servo_set_position` expects. Moving the arm joints in a single call
-        keeps them synchronised instead of stepping one channel at a time.
+        `targets` is a sequence of `(channel, pulse)` pairs. Each channel gets
+        its own `pwm_servo_set_position` call sharing one move time, which is
+        exactly what MasterPi's `ArmIK.servosMove` does -- it issues four
+        separate writes rather than one batched list. Matching the SDK here
+        removes a whole class of "moves through ArmIK but not through us"
+        puzzles. The single sleep at the end still lets the channels travel
+        together.
         """
         t = float(move_time if move_time is not None else self.cfg.gripper_move_time)
         pairs = [[int(channel), int(pulse)] for channel, pulse in targets]
@@ -168,7 +172,8 @@ class ArmController:
             LOG.info(f"[dry] pwm servos -> {pairs} over {t:.2f}s")
             return True
         try:
-            self.board.pwm_servo_set_position(t, pairs)
+            for pair in pairs:
+                self.board.pwm_servo_set_position(t, [pair])
             time.sleep(t + 0.1)
             return True
         except Exception as exc:

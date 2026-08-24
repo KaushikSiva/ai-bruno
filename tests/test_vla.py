@@ -376,3 +376,50 @@ class ArmStateRollbackTest(unittest.TestCase):
             driver.apply(action(action="move_arm_forward", speed=1.0, duration_ms=400))
         self.assertEqual(driver.arm.position, before[0])
         self.assertEqual(driver.arm.joints, before[1])
+
+
+class DeviationTest(unittest.TestCase):
+    """The robot's stored servo trim has to reach the wire."""
+
+    def test_trim_shifts_the_pulse_without_changing_the_scale(self):
+        plain = ServoCalibration(channel=6)
+        trimmed = ServoCalibration(channel=6, deviation_us=-95.0)
+        self.assertEqual(trimmed.pulse_for(0), plain.pulse_for(0) - 95)
+        # A relative move is unaffected: only the absolute zero shifts.
+        self.assertEqual(
+            trimmed.pulse_for(20) - trimmed.pulse_for(0),
+            plain.pulse_for(20) - plain.pulse_for(0),
+        )
+
+    def test_trim_round_trips(self):
+        servo = ServoCalibration(channel=5, deviation_us=63.0)
+        self.assertAlmostEqual(servo.joint_deg_for(servo.pulse_for(30)), 30, places=1)
+
+    def test_trim_survives_a_config_round_trip(self):
+        profile = CalibrationProfile(
+            servos={
+                name: ServoCalibration(channel=K.JOINT_SERVO_CHANNELS[name], deviation_us=-95.0)
+                for name in K.JOINT_NAMES
+            }
+        )
+        restored = CalibrationProfile.from_dict(profile.to_dict())
+        self.assertEqual(restored.servos["base"].deviation_us, -95.0)
+
+
+class IndividualWriteTest(unittest.TestCase):
+    def test_each_channel_gets_its_own_board_call(self):
+        """MasterPi's servosMove issues one write per channel; so must we."""
+        from bruno_core.manipulation.arm import ArmConfig, ArmController
+
+        calls = []
+
+        class FakeBoard:
+            def pwm_servo_set_position(self, move_time, pairs):
+                calls.append((move_time, [list(p) for p in pairs]))
+
+        controller = ArmController(cfg=ArmConfig(), board=FakeBoard(), arm_ik=object())
+        controller.enabled = True
+        controller.set_servos([(6, 1405), (5, 1563), (4, 1572), (3, 1559)], move_time=0.05)
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(all(len(pairs) == 1 for _, pairs in calls))
+        self.assertEqual([pairs[0][0] for _, pairs in calls], [6, 5, 4, 3])

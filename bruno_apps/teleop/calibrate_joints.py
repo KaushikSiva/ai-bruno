@@ -24,6 +24,7 @@ Results land in the `vla.servos` block of config/bruno_config.json.
 import argparse
 import os
 import sys
+from dataclasses import replace
 from typing import Dict, List, Tuple
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -56,6 +57,24 @@ CHECK_POSES: Tuple[Tuple[float, float, float, float], ...] = (
     (0, 15, 6, -30), (4, 8, 18, 0), (-4, 8, 18, 0), (2, 7, 21, 15),
     (-2, 7, 21, 15), (0, 10, 20, 20),
 )
+
+
+def load_deviations() -> Dict[str, float]:
+    """Read the robot's stored per-servo trim, which servosMove adds to every pulse.
+
+    Omitting this is not a rounding error: on the robot this was written for,
+    the base trim is -95 us, so a pulse computed without it lands 8.5 degrees
+    away from where the robot's own IK would have put it.
+    """
+    try:
+        from kinematics.arm_move_ik import deviation_data  # type: ignore
+    except Exception:
+        print("  warning: could not read deviation_data; assuming zero trim")
+        return {name: 0.0 for name in JOINT_NAMES}
+    return {
+        name: float(deviation_data.get(str(JOINT_SERVO_CHANNELS[name]), 0) or 0)
+        for name in JOINT_NAMES
+    }
 
 
 def load_arm_ik():
@@ -107,7 +126,7 @@ def collect_samples(arm_ik) -> Dict[str, List[Tuple[float, float]]]:
     return samples
 
 
-def check_against_sdk(arm_ik, profile) -> Tuple[int, float]:
+def check_against_sdk(arm_ik, profile, deviations: Dict[str, float]) -> Tuple[int, float]:
     """Confirm the fitted map reproduces the SDK's own pulses on real poses.
 
     The fit is derived from single-joint sweeps, so this is the independent
@@ -126,7 +145,10 @@ def check_against_sdk(arm_ik, profile) -> Tuple[int, float]:
         for name, angle in zip(JOINT_NAMES, joints):
             channel = JOINT_SERVO_CHANNELS[name]
             ours = profile.servos[name].pulse_for(angle)
-            worst = max(worst, abs(ours - float(expected[f"servo{channel}"])))
+            # servosMove writes the IK value plus the trim, so that is what a
+            # correct map has to reproduce -- not the raw IK value.
+            theirs = float(expected[f"servo{channel}"]) + deviations[name]
+            worst = max(worst, abs(ours - theirs))
     return checked, worst
 
 
@@ -142,10 +164,11 @@ def main() -> int:
     arm_ik = load_arm_ik()
     print("Reading the pulse map from the robot's own IK (nothing will move)\n")
     samples = collect_samples(arm_ik)
+    deviations = load_deviations()
 
     profile = load_profile(args.config)
     servos = dict(profile.servos)
-    print(f"{'joint':>10} {'samples':>8} {'centre':>9} {'us/deg':>8} {'dir':>5} {'worst err':>10}  status")
+    print(f"{'joint':>10} {'samples':>8} {'centre':>9} {'trim':>7} {'us/deg':>8} {'dir':>5} {'worst err':>10}  status")
     all_verified = True
     for name in JOINT_NAMES:
         points = samples[name]
@@ -155,22 +178,24 @@ def main() -> int:
             )
         except ValueError as exc:
             all_verified = False
-            print(f"{name:>10} {len(points):>8} {'-':>9} {'-':>8} {'-':>5} {'-':>10}  FAILED: {exc}")
+            print(f"{name:>10} {len(points):>8} {'-':>9} {'-':>7} {'-':>8} {'-':>5} {'-':>10}  FAILED: {exc}")
             continue
+        calibration = replace(calibration, deviation_us=deviations[name])
         servos[name] = calibration
         all_verified = all_verified and calibration.verified
         direction = "+" if calibration.sign > 0 else "-"
         status = "verified" if calibration.verified else f"NOT verified (> {args.max_residual_us} us)"
         print(
             f"{name:>10} {len(points):>8} {calibration.center_pulse:>9.1f} "
-            f"{calibration.pulse_per_degree:>8.4f} {direction:>5} {worst:>9.2f}us  {status}"
+            f"{calibration.deviation_us:>+7.0f} {calibration.pulse_per_degree:>8.4f} "
+            f"{direction:>5} {worst:>9.2f}us  {status}"
         )
 
     updated = CalibrationProfile(
         chassis=profile.chassis, arm=profile.arm, gripper=profile.gripper, servos=servos
     )
 
-    checked, worst_pulse = check_against_sdk(arm_ik, updated)
+    checked, worst_pulse = check_against_sdk(arm_ik, updated, deviations)
     print(f"\nCross-check on {checked} real IK poses: worst disagreement with the "
           f"SDK's own pulses is {worst_pulse:.1f} us")
     if worst_pulse > 1.0:
