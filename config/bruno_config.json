@@ -160,38 +160,38 @@
             "base": {
                 "channel": 6,
                 "center_pulse": 1500.0,
-                "pulse_per_degree": 11.11111,
+                "pulse_per_degree": 11.11036,
                 "sign": 1,
                 "min_pulse": 500,
                 "max_pulse": 2500,
-                "verified": false
+                "verified": true
             },
             "shoulder": {
                 "channel": 5,
                 "center_pulse": 1500.0,
-                "pulse_per_degree": 11.11111,
+                "pulse_per_degree": 11.11036,
                 "sign": 1,
                 "min_pulse": 500,
                 "max_pulse": 2500,
-                "verified": false
+                "verified": true
             },
             "elbow": {
                 "channel": 4,
                 "center_pulse": 1500.0,
-                "pulse_per_degree": 11.11111,
+                "pulse_per_degree": 11.11036,
                 "sign": 1,
                 "min_pulse": 500,
                 "max_pulse": 2500,
-                "verified": false
+                "verified": true
             },
             "wrist": {
                 "channel": 3,
                 "center_pulse": 1500.0,
-                "pulse_per_degree": 11.11111,
-                "sign": 1,
+                "pulse_per_degree": 11.11036,
+                "sign": -1,
                 "min_pulse": 500,
                 "max_pulse": 2500,
-                "verified": false
+                "verified": true
             }
         }
     }
