@@ -53,7 +53,7 @@ from bruno_core.vla.contracts import (
     ROTATION_ACTION,
     Action,
 )
-from bruno_core.vla.controller import RobotController, RobotNotArmed
+from bruno_core.vla.controller import RobotController, RobotNotArmed, limits_from_env
 from bruno_core.vla.drivers import make_driver
 from bruno_core.vla.kinematics import JOINT_NAMES
 
@@ -80,7 +80,7 @@ class LocalSession:
         )
         self.driver = driver
         self.profile = profile
-        self.controller = RobotController(driver=driver, profile=profile)
+        self.controller = RobotController(driver=driver, profile=profile, **limits_from_env())
 
     def status(self) -> Dict[str, Any]:
         return self.controller.status()

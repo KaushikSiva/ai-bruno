@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from .calibration import load_profile
 from .contracts import Action, ContractError
-from .controller import RobotController, RobotNotArmed
+from .controller import RobotController, RobotNotArmed, limits_from_env
 from .drivers import make_driver
 from .http_utils import JsonHandler
 
@@ -52,16 +52,7 @@ def build_controller(args: argparse.Namespace) -> RobotController:
         dry_run=args.dry_run,
         allow_uncalibrated=args.allow_uncalibrated,
     )
-    return RobotController(
-        driver=driver,
-        profile=profile,
-        watchdog_seconds=_env_float("BRUNO_COMMAND_WATCHDOG_SECONDS", 2.5),
-        max_speed=_env_float("BRUNO_BRIDGE_MAX_SPEED", 0.5),
-        max_duration_ms=_env_int("BRUNO_BRIDGE_MAX_DURATION_MS", 500),
-        min_confidence=_env_float("BRUNO_BRIDGE_MIN_CONFIDENCE", 0.5),
-        max_rotation_deg=_env_float("BRUNO_MAX_ROTATION_DEGREES", 90.0),
-        max_rotation_duration_ms=_env_int("BRUNO_MAX_ROTATION_DURATION_MS", 4000),
-    )
+    return RobotController(driver=driver, profile=profile, **limits_from_env())
 
 
 def make_handler(controller: RobotController, token: str) -> Type[JsonHandler]:

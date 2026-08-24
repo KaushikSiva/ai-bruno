@@ -15,6 +15,7 @@ keep the workspace clear, and keep a physical emergency stop within reach.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -32,6 +33,38 @@ SEEN_REQUEST_LIMIT = 256
 
 class RobotNotArmed(RuntimeError):
     pass
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def limits_from_env() -> Dict[str, Any]:
+    """Controller bounds from the environment.
+
+    Shared so that a command means the same thing whether it goes through the
+    bridge or straight into a driver. They used to diverge: the bridge read
+    these variables and teleop did not, so raising a limit for one silently
+    left the other at its default.
+    """
+    return {
+        "watchdog_seconds": _env_float("BRUNO_COMMAND_WATCHDOG_SECONDS", 2.5),
+        "max_speed": _env_float("BRUNO_BRIDGE_MAX_SPEED", 0.5),
+        "max_duration_ms": _env_int("BRUNO_BRIDGE_MAX_DURATION_MS", 500),
+        "min_confidence": _env_float("BRUNO_BRIDGE_MIN_CONFIDENCE", 0.5),
+        "max_rotation_deg": _env_float("BRUNO_MAX_ROTATION_DEGREES", 90.0),
+        "max_rotation_duration_ms": _env_int("BRUNO_MAX_ROTATION_DURATION_MS", 4000),
+    }
 
 
 class RobotController:

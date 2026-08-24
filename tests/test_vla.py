@@ -520,3 +520,30 @@ class StopHardeningTest(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             self._driver_with(DeadChassis()).stop()
+
+
+class EnvLimitsTest(unittest.TestCase):
+    """The bridge and direct teleop must enforce the same bounds."""
+
+    def test_rotation_limit_comes_from_the_environment(self):
+        from bruno_core.vla.controller import limits_from_env
+
+        os.environ["BRUNO_MAX_ROTATION_DEGREES"] = "150"
+        self.addCleanup(os.environ.pop, "BRUNO_MAX_ROTATION_DEGREES", None)
+        self.assertEqual(limits_from_env()["max_rotation_deg"], 150.0)
+
+    def test_a_bad_value_falls_back_to_the_default(self):
+        from bruno_core.vla.controller import limits_from_env
+
+        os.environ["BRUNO_MAX_ROTATION_DEGREES"] = "not-a-number"
+        self.addCleanup(os.environ.pop, "BRUNO_MAX_ROTATION_DEGREES", None)
+        self.assertEqual(limits_from_env()["max_rotation_deg"], 90.0)
+
+    def test_rotation_is_clamped_to_the_limit(self):
+        controller = RobotController(MockDriver(), max_rotation_deg=90.0)
+        self.addCleanup(controller.close)
+        controller.set_armed(True)
+        result = controller.execute(
+            action(action="rotate_by_deg", angle_deg=150, speed=0.5, duration_ms=400)
+        )
+        self.assertEqual(result["executed"]["angle_deg"], 90.0)
