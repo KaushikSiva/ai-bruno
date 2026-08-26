@@ -32,6 +32,7 @@ a simulator in another terminal) instead of opening a driver in this process.
 
 import argparse
 import json
+import logging
 import os
 import sys
 import threading
@@ -57,6 +58,8 @@ from bruno_core.vla.contracts import (
 from bruno_core.vla.controller import RobotController, RobotNotArmed, limits_from_env
 from bruno_core.vla.drivers import make_driver
 from bruno_core.vla.kinematics import JOINT_NAMES
+
+LOG = logging.getLogger("bruno_apps.teleop")
 
 TARGET_DRIVERS = {"sim": "mujoco", "real": "bruno", "mock": "mock"}
 META_COMMANDS = ("status", "arm", "disarm", "keys")
@@ -117,8 +120,82 @@ class RemoteSession:
         pass
 
 
+class MirrorSession:
+    """Drives a primary session and echoes every command to a mirror.
+
+    The point is to watch MuJoCo move while the real robot moves. The robot is
+    primary and authoritative: it is commanded first, so a slow or dead mirror
+    can never delay it, and every result teleop reports is the robot's. The
+    mirror is best effort -- its failures are logged once and swallowed, because
+    a simulation that fell over is not a reason to stop being able to stop the
+    robot.
+
+    The reverse would be unsafe: if the mirror could veto or delay a command,
+    the viewer would be deciding what the hardware does.
+    """
+
+    def __init__(self, primary, mirror):
+        self.primary = primary
+        self.mirror = mirror
+        self.profile = primary.profile
+        self.driver = getattr(primary, "driver", None)
+        self._mirror_failed = False
+
+    def _mirror_call(self, name: str, *call_args) -> None:
+        if self.mirror is None:
+            return
+        try:
+            getattr(self.mirror, name)(*call_args)
+        except Exception as exc:
+            if not self._mirror_failed:
+                self._mirror_failed = True
+                LOG.warning(
+                    "mirror %s failed (%s: %s); the robot keeps running, the viewer "
+                    "will now lag behind it", name, type(exc).__name__, exc,
+                )
+        else:
+            self._mirror_failed = False
+
+    def status(self) -> Dict[str, Any]:
+        status = dict(self.primary.status())
+        if self.mirror is not None:
+            try:
+                status["mirror"] = self.mirror.status()
+            except Exception as exc:
+                status["mirror"] = {"error": f"{type(exc).__name__}: {exc}"}
+        return status
+
+    def set_armed(self, armed: bool) -> Dict[str, Any]:
+        result = self.primary.set_armed(armed)
+        self._mirror_call("set_armed", armed)
+        return result
+
+    def send(self, action: Action) -> Dict[str, Any]:
+        result = self.primary.send(action)
+        self._mirror_call("send", action)
+        return result
+
+    def close(self) -> None:
+        try:
+            self.primary.close()
+        finally:
+            if self.mirror is not None:
+                try:
+                    self.mirror.close()
+                except Exception:
+                    pass
+
+
 def open_session(args: argparse.Namespace):
-    return RemoteSession(args) if args.robot_url else LocalSession(args)
+    primary = RemoteSession(args) if args.robot_url else LocalSession(args)
+    mirror_url = getattr(args, "mirror_url", "")
+    if not mirror_url:
+        return primary
+    if mirror_url == args.robot_url:
+        raise SystemExit("--mirror-url and --robot-url are the same bridge")
+    mirror_args = argparse.Namespace(**vars(args))
+    mirror_args.robot_url = mirror_url
+    return MirrorSession(primary, RemoteSession(mirror_args))
 
 
 def build_action(args: argparse.Namespace) -> Action:
@@ -395,6 +472,10 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="sim = MuJoCo, real = the MasterPi, mock = record only")
     parser.add_argument("--robot-url", default=os.getenv("BRUNO_BRIDGE_URL", ""),
                         help="Drive a bridge over HTTP instead of opening a driver here")
+    parser.add_argument("--mirror-url", default=os.getenv("MIRROR_URL", ""),
+                        help="Echo every command to a second bridge (e.g. a local MuJoCo "
+                             "bridge) so simulation mirrors the robot. Best effort: the "
+                             "primary target is never delayed or blocked by it")
     parser.add_argument("--speed", type=float, default=0.3, help="Normalized speed, 0-1")
     parser.add_argument("--duration-ms", type=int, default=400, help="Length of one motion burst")
     parser.add_argument("--angle", type=float, default=0.0, help="Signed angle in degrees")

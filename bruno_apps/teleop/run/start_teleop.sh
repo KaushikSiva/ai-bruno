@@ -21,12 +21,16 @@ fi
 
 TARGET="${TARGET:-sim}"
 ROBOT_URL="${ROBOT_URL:-}"
+MIRROR_URL="${MIRROR_URL:-}"
 
-echo "Teleop target: ${TARGET}${ROBOT_URL:+ via ${ROBOT_URL}}"
+echo "Teleop target: ${TARGET}${ROBOT_URL:+ via ${ROBOT_URL}}${MIRROR_URL:+ | mirroring to ${MIRROR_URL}}"
 
 ARGS=(--target "${TARGET}")
 if [ -n "${ROBOT_URL}" ]; then
   ARGS+=(--robot-url "${ROBOT_URL}")
+fi
+if [ -n "${MIRROR_URL}" ]; then
+  ARGS+=(--mirror-url "${MIRROR_URL}")
 fi
 
 exec "${PYTHON}" "${APP_ROOT}/main.py" keys "${ARGS[@]}" "$@"

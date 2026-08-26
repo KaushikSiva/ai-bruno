@@ -624,3 +624,92 @@ class TeleopBindingTest(unittest.TestCase):
         for key, (binding, label) in KEY_BINDINGS.items():
             with self.subTest(key=key, binding=binding):
                 driver.apply(action_for_binding(binding, 0.3, 400, 15.0, 10.0))
+
+
+class MirrorSessionTest(unittest.TestCase):
+    """Mirroring must never let the simulation interfere with the robot.
+
+    The mirror exists so MuJoCo can be watched while the hardware moves. That
+    is only safe if the robot is strictly primary: a mirror that is slow, dead
+    or throwing must not delay a command, change a result, or -- worst of all --
+    prevent a stop from reaching the robot.
+    """
+
+    class _FakeSession:
+        def __init__(self, name, fail=False):
+            self.name = name
+            self.fail = fail
+            self.sent = []
+            self.armed = []
+            self.closed = False
+            self.profile = "profile-of-" + name
+
+        def _maybe_fail(self):
+            if self.fail:
+                raise RuntimeError(f"{self.name} is down")
+
+        def status(self):
+            self._maybe_fail()
+            return {"driver": self.name}
+
+        def set_armed(self, armed):
+            self._maybe_fail()
+            self.armed.append(armed)
+            return {"armed": armed, "driver": self.name}
+
+        def send(self, action):
+            self._maybe_fail()
+            self.sent.append(action.action)
+            return {"driver": self.name}
+
+        def close(self):
+            self.closed = True
+
+    def _mirror(self, primary_fail=False, mirror_fail=False):
+        from bruno_apps.teleop.main import MirrorSession
+
+        primary = self._FakeSession("robot", fail=primary_fail)
+        mirror = self._FakeSession("sim", fail=mirror_fail)
+        return MirrorSession(primary, mirror), primary, mirror
+
+    def test_every_command_reaches_both(self):
+        session, primary, mirror = self._mirror()
+        session.send(Action.stop("t"))
+        session.set_armed(True)
+        self.assertEqual(primary.sent, ["stop"])
+        self.assertEqual(mirror.sent, ["stop"])
+        self.assertEqual(primary.armed, [True])
+        self.assertEqual(mirror.armed, [True])
+
+    def test_result_always_comes_from_the_robot(self):
+        session, _, _ = self._mirror()
+        self.assertEqual(session.send(Action.stop("t"))["driver"], "robot")
+        self.assertEqual(session.set_armed(True)["driver"], "robot")
+
+    def test_a_dead_mirror_never_blocks_the_robot(self):
+        session, primary, _ = self._mirror(mirror_fail=True)
+        self.assertEqual(session.send(Action.stop("t"))["driver"], "robot")
+        self.assertEqual(session.set_armed(False)["driver"], "robot")
+        self.assertEqual(primary.sent, ["stop"])
+        self.assertEqual(primary.armed, [False])
+
+    def test_a_dead_mirror_is_reported_in_status_not_raised(self):
+        session, _, _ = self._mirror(mirror_fail=True)
+        status = session.status()
+        self.assertEqual(status["driver"], "robot")
+        self.assertIn("error", status["mirror"])
+
+    def test_a_failing_robot_still_raises(self):
+        session, _, _ = self._mirror(primary_fail=True)
+        with self.assertRaises(RuntimeError):
+            session.send(Action.stop("t"))
+
+    def test_close_closes_both(self):
+        session, primary, mirror = self._mirror()
+        session.close()
+        self.assertTrue(primary.closed)
+        self.assertTrue(mirror.closed)
+
+    def test_profile_comes_from_the_primary(self):
+        session, _, _ = self._mirror()
+        self.assertEqual(session.profile, "profile-of-robot")
