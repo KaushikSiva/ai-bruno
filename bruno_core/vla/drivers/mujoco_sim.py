@@ -205,10 +205,20 @@ class MuJoCoDriver(BaseDriver):
             from mujoco import viewer
         except ImportError as exc:
             raise RuntimeError("the installed MuJoCo package has no viewer") from exc
-        with viewer.launch_passive(self._model, self._data) as passive:
+        # launch_passive builds its first scene from _data, and the physics
+        # thread has been stepping since __init__. Reading mjData while mj_step
+        # writes it segfaults, intermittently, before the window ever appears --
+        # so hold the same lock the step loop takes across construction, not
+        # just around sync(). _lock is an RLock, so sync() below may retake it.
+        with self._lock:
+            passive_cm = viewer.launch_passive(self._model, self._data)
+            passive = passive_cm.__enter__()
+        try:
             while passive.is_running() and not self._closed.wait(1.0 / 60.0):
                 with self._lock:
                     passive.sync()
+        finally:
+            passive_cm.__exit__(None, None, None)
 
     def close(self) -> None:
         self._closed.set()
