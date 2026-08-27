@@ -7,9 +7,16 @@ Reads battery voltage from the Hiwonder Board SDK and estimates percentage.
 
 import argparse
 import datetime as dt
+import os
 import sys
 import time
 from typing import Any, Optional
+
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(ROOT, "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 from bruno_core.config.env import get_env_float, load_env
 
@@ -20,7 +27,14 @@ def _resolve_board() -> Any:
         sys.path.append(masterpi_path)
     from common.ros_robot_controller_sdk import Board  # type: ignore
 
-    return Board()
+    board = Board()
+    # The board only publishes readings once its serial receive thread is
+    # running, the same reason ArmController enables it before moving servos.
+    try:
+        board.enable_reception()
+    except Exception:
+        pass
+    return board
 
 
 def _pick_battery_method(board: Any) -> Optional[str]:
@@ -90,12 +104,16 @@ def main() -> int:
         return 2
 
     if not args.watch:
-        line = _read_once(board, method_name, args.min_v, args.max_v)
-        if not line:
-            print("Battery read failed")
-            return 3
-        print(line)
-        return 0
+        # The first reading lands only after a packet has arrived, so a
+        # single-shot read has to wait for one rather than give up at once.
+        for attempt in range(10):
+            line = _read_once(board, method_name, args.min_v, args.max_v)
+            if line:
+                print(line)
+                return 0
+            time.sleep(0.2)
+        print("Battery read failed")
+        return 3
 
     print(f"Using Board.{method_name}() min_v={args.min_v:.2f} max_v={args.max_v:.2f}")
     try:

@@ -65,6 +65,16 @@ ENV_DEFAULTS = {
     "BRUNO_VLM_MIN_CONFIDENCE": "0.45",
     "BRUNO_VLM_INTERVAL_SEC": "1.5",
     "BRUNO_VLM_COOLDOWN_S": "5.0",
+    "BRUNO_PP_STANDOFF_CM": "18.0",
+    "BRUNO_PP_SPEED": "25",
+    "BRUNO_PP_VLM_TIMEOUT_MS": "8000",
+    "BRUNO_PP_VLM_MIN_CONF": "0.35",
+    "BRUNO_PP_USE_YOLO": "1",
+    "BRUNO_PP_YOLO_CONF": "0.35",
+    # COCO class 39. A clear PET bottle has no color of its own, so the class
+    # detector is the only thing that finds one reliably.
+    "BRUNO_PP_YOLO_CLASSES": "bottle",
+    "BRUNO_PP_YOLO_IMGSZ": "320",
     "STREAM_SOURCE": "0",
     "HOST": "0.0.0.0",
     "PORT": "8080",
