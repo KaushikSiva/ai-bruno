@@ -7,9 +7,16 @@ Reads battery voltage from the Hiwonder Board SDK and estimates percentage.
 
 import argparse
 import datetime as dt
+import os
 import sys
 import time
 from typing import Any, Optional
+
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(ROOT, "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 from bruno_core.config.env import get_env_float, load_env
 
